@@ -8,7 +8,7 @@ public class DroneSim : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
-			"Core", "CoreUObject", "Engine", "InputCore", "Sockets", "Networking"
+			"Core", "CoreUObject", "Engine", "InputCore", "Sockets", "Networking", "ProceduralMeshComponent"
 		});
 	}
 }

@@ -1,5 +1,6 @@
 #include "DronePawn.h"
 
+#include "DroneSimGameMode.h"
 #include "PhoneControllerSubsystem.h"
 #include "Camera/CameraTypes.h"
 #include "Components/SphereComponent.h"
@@ -136,6 +137,17 @@ void ADronePawn::BeginPlay()
 	SpawnLocation = GetActorLocation();
 	HomeLocation = SpawnLocation;
 	WindPreset = 1;
+
+	// Built-in landscapes know exactly where the take-off point is; otherwise Tick finds the ground by tracing.
+	if (const ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>())
+	{
+		FVector Spawn;
+		float Fence = 0.f;
+		if (GameMode->GetSceneSpawn(Spawn, Fence))
+		{
+			SetSpawnPoint(Spawn, Fence);
+		}
+	}
 }
 
 void ADronePawn::Tick(float DeltaSeconds)
@@ -268,6 +280,7 @@ void ADronePawn::GatherInput(float DeltaSeconds)
 		}
 		if (PC->WasInputKeyJustPressed(EKeys::G)) { CycleWind(); }
 		if (PC->WasInputKeyJustPressed(EKeys::R)) { ResetDrone(); }
+		if (PC->WasInputKeyJustPressed(EKeys::F2)) { HandleCommand(TEXT("scene")); }
 	}
 
 	// Phone controller
@@ -333,6 +346,13 @@ void ADronePawn::HandleCommand(const FString& Command)
 	else if (Name == TEXT("camera")) { CycleCameraView(); }
 	else if (Name == TEXT("wind")) { CycleWind(); }
 	else if (Name == TEXT("reset")) { ResetDrone(); }
+	else if (Name == TEXT("scene"))
+	{
+		if (ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>())
+		{
+			GameMode->CycleScene();   // calls back into SetSpawnPoint
+		}
+	}
 }
 
 void ADronePawn::UpdateStickGestures(float DeltaSeconds)
@@ -455,6 +475,22 @@ void ADronePawn::CycleWind()
 	WindSpeed = WindPresets[WindPreset];
 }
 
+void ADronePawn::SetSpawnPoint(const FVector& GroundLocation, float InFenceRadiusM)
+{
+	SpawnLocation = GroundLocation + FVector(0.0, 0.0, CollisionRadiusCm + 2.0);
+	FenceRadiusM = InFenceRadiusM;
+	bPlaced = true;
+
+	// The pilot stands 3 m behind the take-off point, on whatever ground is there.
+	const FVector Behind = SpawnLocation + FRotator(0.0, SpawnYawDeg, 0.0).RotateVector(FVector(-300.0, 0.0, 0.0));
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(DronePilotTrace), false, this);
+	const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, Behind + FVector(0.0, 0.0, 5000.0), Behind - FVector(0.0, 0.0, 5000.0), ECC_Visibility, Params);
+	PilotEyeLocation = (bHit ? Hit.ImpactPoint : Behind) + FVector(0.0, 0.0, 170.0);
+
+	ResetDrone();
+}
+
 void ADronePawn::ResetDrone()
 {
 	SetActorLocation(SpawnLocation, false);
@@ -467,6 +503,7 @@ void ADronePawn::ResetDrone()
 	ThrustAccel = 0.0;
 	bOnGround = true;
 	bAtMaxHeight = false;
+	bAtFence = false;
 	bBatteryRthDone = false;
 	BatteryPercent = 100.f;
 	GimbalPitch = 0.f;
@@ -630,6 +667,26 @@ void ADronePawn::Simulate(double Dt)
 		break;
 	}
 
+	// Flight area limit: outside it, only commands that bring the drone back are accepted.
+	bAtFence = false;
+	if (FenceRadiusM > 0.0)
+	{
+		const FVector2D FromSpawn((Location.X - SpawnLocation.X) / 100.0, (Location.Y - SpawnLocation.Y) / 100.0);
+		const double SpawnDistance = FromSpawn.Size();
+		if (SpawnDistance > FenceRadiusM)
+		{
+			const FVector2D Outward = FromSpawn / SpawnDistance;
+			const double OutwardSpeed = FVector2D::DotProduct(VelocityCommand, Outward);
+			if (OutwardSpeed > 0.0)
+			{
+				VelocityCommand -= Outward * OutwardSpeed;
+			}
+			VelocityCommand -= Outward * FMath::Min<double>(3.0, (SpawnDistance - FenceRadiusM) * 0.5);
+			bDirectTilt = false;   // position control takes over, even in ATTI
+			bAtFence = true;
+		}
+	}
+
 	// Height ceiling and landing protection (slow descent close to the ground).
 	if (ClimbCommand > 0.0 && Height >= MaxHeightM)
 	{
@@ -788,6 +845,7 @@ void ADronePawn::UpdateBatteryAndWarnings(float DeltaSeconds)
 	else if (BatteryPercent <= CriticalBatteryPercent) { WarningText = TEXT("CRITICAL BATTERY - LANDING"); }
 	else if (State == EDroneState::ReturningHome) { WarningText = TEXT("RETURNING TO HOME"); }
 	else if (BatteryPercent <= LowBatteryPercent) { WarningText = TEXT("LOW BATTERY - return to home"); }
+	else if (bAtFence) { WarningText = TEXT("EDGE OF FLIGHT AREA"); }
 	else if (bAtMaxHeight) { WarningText = TEXT("MAX ALTITUDE REACHED"); }
 	else if (GetDistanceM() > VlosWarningDistanceM) { WarningText = TEXT("BEYOND VISUAL LINE OF SIGHT"); }
 	else if (bAtti) { WarningText = TEXT("ATTI MODE - no position hold"); }
@@ -844,11 +902,14 @@ void ADronePawn::SendPhoneTelemetry(float DeltaSeconds)
 		return;
 	}
 
-	// state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|wind|warning
-	Phone->BroadcastTelemetry(FString::Printf(TEXT("%d|%d|%d|%d|%.1f|%.0f|%.1f|%.1f|%.0f|%d|%.0f|%s"),
+	const ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>();
+	const FString SceneName = GameMode ? GameMode->GetSceneName() : FString();
+
+	// state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|wind|scene|warning
+	Phone->BroadcastTelemetry(FString::Printf(TEXT("%d|%d|%d|%d|%.1f|%.0f|%.1f|%.1f|%.0f|%d|%.0f|%s|%s"),
 		static_cast<int32>(State), static_cast<int32>(FlightMode), bAtti ? 1 : 0, static_cast<int32>(StickMode),
 		GetHeightM(), GetDistanceM(), GetHorizontalSpeed(), GetVerticalSpeed(), BatteryPercent,
-		static_cast<int32>(CameraView), WindSpeed, *WarningText));
+		static_cast<int32>(CameraView), WindSpeed, SceneName.IsEmpty() ? TEXT("-") : *SceneName, *WarningText));
 }
 
 float ADronePawn::GetHeightM() const

@@ -1,6 +1,7 @@
 #include "DroneHUD.h"
 
 #include "DronePawn.h"
+#include "DroneSimGameMode.h"
 #include "PhoneControllerSubsystem.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
@@ -86,7 +87,13 @@ void ADroneHUD::DrawHUD()
 	const float Margin = 24.f * S;
 
 	// ---- Top left: state, flight mode, view
-	DrawRect(Panel, Margin, Margin, 430.f * S, Line * 3.f + 16.f * S);
+	const ADroneSimGameMode* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ADroneSimGameMode>() : nullptr;
+	const FString SceneName = GameMode ? GameMode->GetSceneName() : FString();
+	DrawRect(Panel, Margin, Margin, 430.f * S, Line * (SceneName.IsEmpty() ? 3.f : 4.f) + 16.f * S);
+	if (!SceneName.IsEmpty())
+	{
+		DrawText(SceneName, Dim, Margin + 10.f * S, Margin + 8.f * S + Line * 3.f, Font, T);
+	}
 	const int32 StickModeIndex = FMath::Clamp(static_cast<int32>(Drone->GetStickMode()), 0, 2);
 	DrawText(FString::Printf(TEXT("%s  -  %s%s"), StateName(Drone->GetDroneState()), ModeName(Drone->GetFlightMode()), Drone->IsAtti() ? TEXT(" / ATTI") : TEXT(" / GPS")),
 		Drone->GetDroneState() == EDroneState::Crashed ? Bad : White, Margin + 10.f * S, Margin + 8.f * S, Font, T);
@@ -146,7 +153,7 @@ void ADroneHUD::DrawHUD()
 	{
 		static const TCHAR* HelpLines[] =
 		{
-			TEXT("F1  show / hide this help        Q  show / hide QR code"),
+			TEXT("F1  show / hide this help        Q  show / hide QR code       F2  next landscape"),
 			TEXT("Left stick  W A S D              Right stick  arrow keys      (or a gamepad / phone)"),
 			TEXT("T  take off / land               H  return to home            R  reset"),
 			TEXT("1 2 3  Cine / Normal / Sport     4  ATTI (no GPS hold)        M  stick mode"),

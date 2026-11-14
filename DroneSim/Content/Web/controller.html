@@ -86,6 +86,7 @@
     position: fixed; inset: 0; z-index: 10; display: none; flex-direction: column; align-items: center; justify-content: center;
     gap: 14px; padding: 24px; text-align: center; background: rgba(20,22,24,.97);
   }
+  .overlay { gap: 10px; }
   .overlay h1 { margin: 0; font-size: 20px; }
   .overlay p { margin: 0; color: var(--dim); max-width: 420px; }
   .overlay button { flex: none; padding: 10px 28px; }
@@ -151,6 +152,9 @@
   <div class="row">
     <button id="bAtti">ATTI (no GPS hold)</button>
     <button id="bWind">Wind: --</button>
+  </div>
+  <div class="row">
+    <button id="bScene" class="small">Next landscape</button>
   </div>
   <div class="row">
     <button id="bFull">Full screen</button>
@@ -220,14 +224,15 @@
   }, 33);
 
   // ---------------------------------------------------------------- telemetry
-  // t|role|state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|wind|warning
+  // t|role|state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|wind|scene|warning
   function onMessage(text) {
     var p = text.split('|');
-    if (p[0] !== 't' || p.length < 13) { return; }
+    if (p[0] !== 't' || p.length < 14) { return; }
     var pilot = p[1] === 'P';
     var state = parseInt(p[2], 10), mode = parseInt(p[3], 10), atti = p[4] === '1', stickMode = parseInt(p[5], 10);
     var battery = parseFloat(p[10]);
-    var warning = p[13] || '';
+    var warning = p[14] || '';
+    $('bScene').textContent = p[13] === '-' ? 'Landscape: custom map' : 'Next landscape (now: ' + p[13] + ')';
 
     $('status').textContent = (STATE_NAMES[state] || '') + (pilot ? '' : ' (spectating)');
     $('tH').textContent = p[6];
@@ -340,6 +345,7 @@
   $('bCam').onclick = function () { command('camera'); };
   $('bAtti').onclick = function () { command('atti'); };
   $('bWind').onclick = function () { command('wind'); };
+  $('bScene').onclick = function () { command('scene'); $('menu').className = 'overlay'; };
   $('bReset').onclick = function () { command('reset'); $('menu').className = 'overlay'; };
   $('bClaim').onclick = function () { command('claim'); };
   $('bMenu').onclick = function () { $('menu').className = 'overlay show'; };

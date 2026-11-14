@@ -41,6 +41,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Drone") void CycleWind();
 	UFUNCTION(BlueprintCallable, Category = "Drone") void ResetDrone();
 
+	/** Moves the take-off point to a spot on the ground (cm) and resets the drone there. FenceRadiusM <= 0 means no limit. */
+	UFUNCTION(BlueprintCallable, Category = "Drone") void SetSpawnPoint(const FVector& GroundLocation, float InFenceRadiusM);
+
 	// ---- Telemetry
 	UFUNCTION(BlueprintPure, Category = "Drone") EDroneState GetDroneState() const { return State; }
 	UFUNCTION(BlueprintPure, Category = "Drone") EDroneFlightMode GetFlightMode() const { return FlightMode; }
@@ -165,6 +168,8 @@ private:
 	double SimTime = 0.0;
 	bool bOnGround = true;
 	bool bAtMaxHeight = false;
+	bool bAtFence = false;
+	double FenceRadiusM = 0.0;                   // flight area limit around the spawn point, 0 = none
 	bool bBatteryRthDone = false;
 
 	// ---- Misc
