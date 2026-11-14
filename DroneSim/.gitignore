@@ -8,3 +8,4 @@ DerivedDataCache/
 *.suo
 *.xcworkspace
 Downloads/
+__pycache__/
