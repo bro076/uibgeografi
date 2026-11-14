@@ -10,6 +10,7 @@
 #include "Components/VolumetricCloudComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/ExponentialHeightFog.h"
+#include "Engine/PostProcessVolume.h"
 #include "Engine/SkyLight.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -107,7 +108,25 @@ void ADroneSimGameMode::SpawnSky()
 		if (UExponentialHeightFogComponent* Component = Fog->GetComponent())
 		{
 			Component->SetFogDensity(0.006f);
+			Component->SetVolumetricFog(true);   // soft light shafts and haze in the valleys
 		}
+	}
+
+	// A light film grade over the whole world.
+	if (APostProcessVolume* Grade = World->SpawnActor<APostProcessVolume>())
+	{
+		Grade->bUnbound = true;
+		FPostProcessSettings& Settings = Grade->Settings;
+		Settings.bOverride_BloomIntensity = true;
+		Settings.BloomIntensity = 0.4f;
+		Settings.bOverride_VignetteIntensity = true;
+		Settings.VignetteIntensity = 0.25f;
+		Settings.bOverride_AutoExposureBias = true;
+		Settings.AutoExposureBias = 0.3f;
+		Settings.bOverride_AutoExposureSpeedUp = true;
+		Settings.AutoExposureSpeedUp = 2.f;
+		Settings.bOverride_AutoExposureSpeedDown = true;
+		Settings.AutoExposureSpeedDown = 1.5f;
 	}
 }
 

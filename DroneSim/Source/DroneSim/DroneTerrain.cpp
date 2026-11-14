@@ -11,6 +11,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "UObject/ConstructorHelpers.h"
+#include "UObject/SoftObjectPath.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogDroneTerrain, Log, All);
 
@@ -171,8 +172,14 @@ bool ADroneTerrain::IsOrchardCell(double NorthM, double EastM) const
 	return CellRandom(CellN, CellE, 7u) < 0.4f;
 }
 
-FLinearColor ADroneTerrain::ColorFor(EGround Type, double NorthM, double EastM, float HeightM, float SlopeDeg) const
+FLinearColor ADroneTerrain::Shade(EGround Type, double NorthM, double EastM, float HeightM, float SlopeDeg, float* W) const
 {
+	enum { Grass, ForestFloor, Heath, Snow, Soil, Hay, BlueIce, Lake };
+	for (int32 i = 0; i < NumLayers; ++i)
+	{
+		W[i] = 0.f;
+	}
+
 	const float Broad = Noise(NorthM, EastM, 260.0);   // -1..1
 	const float Fine = Noise(NorthM, EastM, 31.0);
 	FLinearColor Color;
@@ -186,6 +193,7 @@ FLinearColor ADroneTerrain::ColorFor(EGround Type, double NorthM, double EastM, 
 		Color = FLinearColor(0.30f, 0.28f, 0.24f);
 		break;
 	case EGround::Lake:
+		W[Lake] = 1.f;
 		return FLinearColor(0.07f, 0.20f, 0.24f);   // meltwater
 	case EGround::Ice:
 	{
@@ -193,7 +201,10 @@ FLinearColor ADroneTerrain::ColorFor(EGround Type, double NorthM, double EastM, 
 		Color = FLinearColor(0.88f, 0.91f, 0.95f);
 		const float Flow = FMath::Clamp((SlopeDeg - 7.f) / 12.f, 0.f, 1.f);
 		const float Band = FMath::Abs(FMath::Sin(static_cast<float>((NorthM * 0.6 + EastM * 0.8) / 23.0) + Broad * 3.f));
-		Color = FMath::Lerp(Color, FLinearColor(0.40f, 0.66f, 0.84f), Flow * (0.35f + 0.65f * FMath::Pow(Band, 6.f)));
+		const float Blue = Flow * (0.35f + 0.65f * FMath::Pow(Band, 6.f));
+		Color = FMath::Lerp(Color, FLinearColor(0.40f, 0.66f, 0.84f), Blue);
+		W[Snow] = 1.f;
+		W[BlueIce] = Blue;
 		break;
 	}
 	case EGround::Cultivated:
@@ -204,22 +215,25 @@ FLinearColor ADroneTerrain::ColorFor(EGround Type, double NorthM, double EastM, 
 			const int32 CellN = FMath::FloorToInt32(NorthM / FieldCellM);
 			const int32 CellE = FMath::FloorToInt32(EastM / FieldCellM);
 			const float Pick = CellRandom(CellN, CellE, 3u);
-			if (IsOrchardCell(NorthM, EastM)) { Color = FLinearColor(0.11f, 0.24f, 0.06f); }
-			else if (Pick < 0.5f) { Color = FLinearColor(0.20f, 0.36f, 0.08f); }
-			else if (Pick < 0.8f) { Color = FLinearColor(0.42f, 0.40f, 0.13f); }
-			else { Color = FLinearColor(0.20f, 0.13f, 0.08f); }
+			if (IsOrchardCell(NorthM, EastM)) { Color = FLinearColor(0.11f, 0.24f, 0.06f); W[Grass] = 1.f; }
+			else if (Pick < 0.5f) { Color = FLinearColor(0.20f, 0.36f, 0.08f); W[Grass] = 1.f; }
+			else if (Pick < 0.8f) { Color = FLinearColor(0.42f, 0.40f, 0.13f); W[Hay] = 1.f; }
+			else { Color = FLinearColor(0.20f, 0.13f, 0.08f); W[Soil] = 1.f; }
 		}
 		else
 		{
 			Color = FLinearColor(0.18f, 0.32f, 0.08f);
+			W[Grass] = 1.f;
 		}
 		break;
 	}
 	case EGround::Forest:
 		Color = FMath::Lerp(FLinearColor(0.04f, 0.10f, 0.035f), FLinearColor(0.09f, 0.17f, 0.05f), Broad * 0.5f + 0.5f);
+		W[ForestFloor] = 1.f;
 		break;
 	case EGround::Heath:
 		Color = FMath::Lerp(FLinearColor(0.20f, 0.20f, 0.09f), FLinearColor(0.26f, 0.22f, 0.13f), Broad * 0.5f + 0.5f);
+		W[Heath] = 1.f;
 		break;
 	case EGround::Cliff:
 		Color = FLinearColor(0.17f, 0.17f, 0.18f);
@@ -231,11 +245,14 @@ FLinearColor ADroneTerrain::ColorFor(EGround Type, double NorthM, double EastM, 
 		if (Biome == EDroneBiome::Glacier && HeightM < 980.f)
 		{
 			Color = FMath::Lerp(Color, FLinearColor(0.19f, 0.21f, 0.11f), 0.6f);   // moss and lichen lower down
+			W[Heath] = 0.6f;
 		}
 		const float SnowLine = Biome == EDroneBiome::Glacier ? 1050.f : 1200.f;
 		if (HeightM > SnowLine && SlopeDeg < 30.f && Broad + Fine * 0.5f > 0.1f)
 		{
 			Color = FLinearColor(0.86f, 0.89f, 0.93f);   // lingering snow patches
+			W[Heath] = 0.f;
+			W[Snow] = 1.f;
 		}
 		break;
 	}
@@ -271,12 +288,17 @@ bool ADroneTerrain::Build(const FString& FileName, float InSpacingM, EDroneBiome
 	// ---- Ground mesh
 	TArray<FVector> Vertices;
 	TArray<FVector> Normals;
-	TArray<FVector2D> UVs;
+	TArray<FVector2D> UVs[4];   // layer blend weights, two per channel
+	TArray<FProcMeshTangent> Tangents;
 	TArray<FLinearColor> Colors;
 	TArray<int32> Triangles;
 	Vertices.Reserve(NumSamples);
 	Normals.Reserve(NumSamples);
-	UVs.Reserve(NumSamples);
+	Tangents.Reserve(NumSamples);
+	for (TArray<FVector2D>& Channel : UVs)
+	{
+		Channel.Reserve(NumSamples);
+	}
 	Colors.Reserve(NumSamples);
 	Triangles.Reserve((GridSize - 1) * (GridSize - 1) * 6);
 
@@ -298,8 +320,15 @@ bool ADroneTerrain::Build(const FString& FileName, float InSpacingM, EDroneBiome
 			const float MeshHeightM = Type == EGround::Sea ? SeabedM : HeightM;
 			Vertices.Add(FVector(NorthM * 100.0, EastM * 100.0, MeshHeightM * 100.0));
 			Normals.Add(Normal);
-			UVs.Add(FVector2D(Col / 8.0, Row / 8.0));
-			Colors.Add(ColorFor(Type, NorthM, EastM, HeightM, SlopeDeg));
+			// Textures are projected along world X/Y, so the tangent is world X laid onto the surface.
+			Tangents.Add(FProcMeshTangent((FVector::XAxisVector - Normal * Normal.X).GetSafeNormal(), false));
+
+			float Weights[NumLayers];
+			Colors.Add(Shade(Type, NorthM, EastM, HeightM, SlopeDeg, Weights));
+			for (int32 Channel = 0; Channel < 4; ++Channel)
+			{
+				UVs[Channel].Add(FVector2D(Weights[Channel * 2], Weights[Channel * 2 + 1]));
+			}
 		}
 	}
 
@@ -322,8 +351,14 @@ bool ADroneTerrain::Build(const FString& FileName, float InSpacingM, EDroneBiome
 		}
 	}
 
-	Ground->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs, Colors, TArray<FProcMeshTangent>(), true);
+	Ground->CreateMeshSection_LinearColor(0, Vertices, Triangles, Normals, UVs[0], UVs[1], UVs[2], UVs[3], Colors, Tangents, true);
+
+	// Prefer the photoscanned material built by Tools/setup_realistic_assets.py; fall back to flat vertex colours.
 	UMaterialInterface* Material = TerrainMaterial.Get();
+	if (!Material)
+	{
+		Material = Cast<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/DroneSim/M_DroneTerrain.M_DroneTerrain")).TryLoad());
+	}
 	if (!Material && GEngine)
 	{
 		Material = static_cast<UMaterialInterface*>(GEngine->VertexColorMaterial);
@@ -341,7 +376,27 @@ bool ADroneTerrain::Build(const FString& FileName, float InSpacingM, EDroneBiome
 		const float PlaneScale = GetHalfExtentM() * 6.f;   // basic plane is 1 m across at scale 1; reach well past the terrain edge
 		Water->SetRelativeScale3D(FVector(PlaneScale, PlaneScale, 1.f));
 		Water->SetRelativeLocation(FVector::ZeroVector);
-		SetScatterColor(Water, FLinearColor(0.012f, 0.045f, 0.06f));
+		if (UMaterialInterface* WaterMaterial = Cast<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/DroneSim/M_DroneWater.M_DroneWater")).TryLoad()))
+		{
+			Water->SetMaterial(0, WaterMaterial);
+		}
+		else
+		{
+			SetScatterColor(Water, FLinearColor(0.012f, 0.045f, 0.06f));
+		}
+	}
+
+	// Real tree models replace the cone and sphere stand-ins when they have been imported.
+	ConiferMesh = Cast<UStaticMesh>(FSoftObjectPath(TEXT("/Game/DroneSim/Trees/SM_Conifer.SM_Conifer")).TryLoad());
+	BroadleafMesh = Cast<UStaticMesh>(FSoftObjectPath(TEXT("/Game/DroneSim/Trees/SM_Broadleaf.SM_Broadleaf")).TryLoad());
+	if (ConiferMesh)
+	{
+		Conifers->SetStaticMesh(ConiferMesh);
+	}
+	if (BroadleafMesh)
+	{
+		BroadleafCrowns->SetStaticMesh(BroadleafMesh);
+		OrchardCrowns->SetStaticMesh(BroadleafMesh);
 	}
 
 	BuildScatter();
@@ -351,6 +406,24 @@ bool ADroneTerrain::Build(const FString& FileName, float InSpacingM, EDroneBiome
 		Conifers->GetInstanceCount() + BroadleafCrowns->GetInstanceCount() + OrchardCrowns->GetInstanceCount(),
 		Houses->GetInstanceCount() + Barns->GetInstanceCount());
 	return true;
+}
+
+FTransform ADroneTerrain::TreeTransform(const UStaticMesh* RealMesh, double NorthM, double EastM, float GroundM, float HeightM, float WidthM, float YawDeg) const
+{
+	if (RealMesh)
+	{
+		// Scale the model to the wanted height and stand its lowest point slightly below the ground,
+		// whatever units and pivot it was authored with.
+		const FBoxSphereBounds Bounds = RealMesh->GetBounds();
+		const double ModelHeight = FMath::Max<double>(Bounds.BoxExtent.Z * 2.0, 1.0);
+		const double Scale = HeightM * 100.0 / ModelHeight;
+		const double BottomZ = (Bounds.Origin.Z - Bounds.BoxExtent.Z) * Scale;
+		return FTransform(FRotator(0.f, YawDeg, 0.f), FVector(NorthM * 100.0, EastM * 100.0, GroundM * 100.0 - BottomZ - 20.0), FVector(Scale));
+	}
+
+	// Stand-in: an engine cone or sphere, 100 cm across and centred on its origin.
+	return FTransform(FRotator::ZeroRotator, FVector(NorthM * 100.0, EastM * 100.0, (GroundM + HeightM * 0.55f) * 100.0),
+		FVector(WidthM, WidthM, HeightM * 0.85f));
 }
 
 void ADroneTerrain::BuildScatter()
@@ -414,15 +487,17 @@ void ADroneTerrain::BuildScatter()
 				{
 					continue;
 				}
+				const float Yaw = Random.FRandRange(0.f, 360.f);
 				if (bSpruce)
 				{
-					Place(ConiferT, NorthM, EastM, HeightM, 5.5f * Size, FVector(4.f, 4.f, 11.f) * Size, 0.f);
+					ConiferT.Add(TreeTransform(ConiferMesh, NorthM, EastM, HeightM, 13.f * Size, 4.5f * Size, Yaw));
 				}
 				else
 				{
-					Place(BroadleafT, NorthM, EastM, HeightM, 6.f * Size, FVector(5.f, 5.f, 6.f) * Size, 0.f);
-					Place(TrunkT, NorthM, EastM, HeightM, 1.8f * Size, FVector(0.35f, 0.35f, 4.f) * Size, 0.f);
+					BroadleafT.Add(TreeTransform(BroadleafMesh, NorthM, EastM, HeightM, 10.f * Size, 5.5f * Size, Yaw));
 				}
+				// Trunks are what the drone collides with; they stay hidden inside real tree models.
+				Place(TrunkT, NorthM, EastM, HeightM, 1.8f * Size, FVector(0.35f, 0.35f, 4.f) * Size, 0.f);
 			}
 		}
 	}
@@ -448,7 +523,7 @@ void ADroneTerrain::BuildScatter()
 				{
 					continue;
 				}
-				Place(OrchardT, N, E, HeightM, 2.3f * Size, FVector(2.6f, 2.6f, 2.3f) * Size, 0.f);
+				OrchardT.Add(TreeTransform(BroadleafMesh, N, E, HeightM, 3.4f * Size, 2.6f * Size, Random.FRandRange(0.f, 360.f)));
 				Place(TrunkT, N, E, HeightM, 0.7f, FVector(0.16f, 0.16f, 1.6f), 0.f);
 			}
 		}
@@ -461,9 +536,26 @@ void ADroneTerrain::BuildScatter()
 	Houses->AddInstances(HouseT, false);
 	Barns->AddInstances(BarnT, false);
 
-	SetScatterColor(Conifers, FLinearColor(0.02f, 0.07f, 0.03f));
-	SetScatterColor(BroadleafCrowns, FLinearColor(0.10f, 0.22f, 0.05f));
-	SetScatterColor(OrchardCrowns, FLinearColor(0.16f, 0.30f, 0.07f));
+	if (!ConiferMesh)
+	{
+		SetScatterColor(Conifers, FLinearColor(0.02f, 0.07f, 0.03f));
+	}
+	if (!BroadleafMesh)
+	{
+		SetScatterColor(BroadleafCrowns, FLinearColor(0.10f, 0.22f, 0.05f));
+		SetScatterColor(OrchardCrowns, FLinearColor(0.16f, 0.30f, 0.07f));
+	}
+	else
+	{
+		// Model trees have no collision of their own; the hidden trunk cylinders provide it.
+		BroadleafCrowns->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		OrchardCrowns->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (ConiferMesh)
+	{
+		Conifers->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	Trunks->SetVisibility(!(ConiferMesh && BroadleafMesh));
 	SetScatterColor(Trunks, FLinearColor(0.10f, 0.07f, 0.05f));
 	SetScatterColor(Houses, FLinearColor(0.85f, 0.84f, 0.80f));   // white-painted houses
 	SetScatterColor(Barns, FLinearColor(0.45f, 0.06f, 0.04f));    // red barns

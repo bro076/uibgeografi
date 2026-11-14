@@ -41,7 +41,10 @@ public:
 	/** Distance from the centre to the edge of the terrain, metres. */
 	float GetHalfExtentM() const { return SpacingM * (GridSize - 1) * 0.5f; }
 
-	/** Material for the ground. Must use vertex colour as base colour. Defaults to the engine's vertex colour material. */
+	/**
+	 * Material for the ground. If unset, /Game/DroneSim/M_DroneTerrain is used when it exists (built by
+	 * Tools/setup_realistic_assets.py), otherwise the engine's plain vertex colour material.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Terrain") TObjectPtr<UMaterialInterface> TerrainMaterial;
 
 	/** Flip this if the ground is invisible from above (triangle winding convention). */
@@ -57,6 +60,10 @@ protected:
 	UPROPERTY() TObjectPtr<UHierarchicalInstancedStaticMeshComponent> Houses;
 	UPROPERTY() TObjectPtr<UHierarchicalInstancedStaticMeshComponent> Barns;
 
+	// Real tree models, loaded from /Game/DroneSim/Trees when the setup script has imported them.
+	UPROPERTY() TObjectPtr<UStaticMesh> ConiferMesh;
+	UPROPERTY() TObjectPtr<UStaticMesh> BroadleafMesh;
+
 private:
 	enum class EGround : uint8 { Sea, Shore, Cultivated, Forest, Heath, HighRock, Cliff, Ice, Lake };
 
@@ -65,11 +72,15 @@ private:
 	void Analyse(int32 Row, int32 Col, float& OutSlopeDeg, float& OutRoughness, FVector& OutNormal) const;
 	EGround Classify(double NorthM, double EastM, float HeightM, float SlopeDeg, float Roughness) const;
 	EGround ClassifyAt(double NorthM, double EastM, float* OutHeightM = nullptr, float* OutSlopeDeg = nullptr) const;
-	FLinearColor ColorFor(EGround Type, double NorthM, double EastM, float HeightM, float SlopeDeg) const;
+	/** Flat colour for the fallback material, plus blend weights for the layered material (see NumLayers). */
+	FLinearColor Shade(EGround Type, double NorthM, double EastM, float HeightM, float SlopeDeg, float* OutWeights) const;
+	FTransform TreeTransform(const UStaticMesh* RealMesh, double NorthM, double EastM, float GroundM, float HeightM, float WidthM, float YawDeg) const;
 	bool IsOrchardCell(double NorthM, double EastM) const;
 	void BuildScatter();
 
 	static constexpr int32 GridSize = 513;
+	// Layer weights, two per UV channel: grass, forest floor, heath, snow, soil, hay, blue ice, lake. The rest is rock.
+	static constexpr int32 NumLayers = 8;
 	TArray<float> Heights;   // metres, row 0 = north edge
 	float SpacingM = 10.f;
 	EDroneBiome Biome = EDroneBiome::Fjord;

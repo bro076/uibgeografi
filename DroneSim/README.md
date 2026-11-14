@@ -8,8 +8,9 @@ with the option to use a phone as the remote controller.
 > What *has* been tested outside Unreal: the phone controller page (touch sticks, buttons,
 > pilot/spectator hand-over, against a mock server that speaks the same protocol), the QR
 > code generator (output decoded successfully), and the elevation files and ground-type rules
-> for the three landscapes (previewed as top-down maps). The landscapes have not been seen
-> rendered in Unreal.
+> for the three landscapes (previewed as top-down maps), and the asset downloader (every file
+> fetched successfully). The landscapes have not been seen rendered in Unreal, and the editor
+> script that builds the realistic materials has never been run.
 
 ## What is in it
 
@@ -23,12 +24,51 @@ with the option to use a phone as the remote controller.
 | `Source/DroneSim/DroneSimGameMode.*` | Spawns the sky and lighting, loads and switches landscapes |
 | `Content/Terrain/*.r16` | Real elevation data for the three landscapes |
 | `Tools/fetch_terrain.py` | Downloads elevation data for any coordinate, to add your own sites |
+| `Tools/fetch_assets.py` | Downloads the photoscanned textures and tree models |
+| `Tools/setup_realistic_assets.py` | Run in the Unreal editor: imports them and builds the ground, water and tree materials |
 | `Content/Web/controller.html` | The page the phone loads: two virtual sticks, flight buttons, live telemetry |
 
-There are no art assets. The drone is a placeholder built from engine cubes (red lights
-at the front, green at the back). The landscapes are generated in code from real elevation
-data, coloured per vertex, with trees and buildings made from engine cones, spheres and boxes.
-The terrain shape is accurate; the surface detail is schematic, not photorealistic.
+The repository contains no art assets. Out of the box the landscapes are flat-coloured with
+cone and sphere trees. The realistic look comes from free photoscanned assets that two scripts
+download and install on your PC — see **Realistic graphics** below. Do that step; it is the
+difference between a schematic and a landscape.
+
+The drone itself is a placeholder built from engine cubes (red lights at the front, green at
+the back).
+
+## Realistic graphics
+
+Two steps, once per PC (about 130 MB download, all CC0 from polyhaven.com):
+
+1. In a terminal: `python Tools/fetch_assets.py`
+2. In the Unreal editor: **Tools → Execute Python Script…** and pick
+   `Tools/setup_realistic_assets.py`. Watch the Output Log for lines starting
+   `[DroneSim setup]`.
+
+Press Play again and you get:
+
+- **Ground:** photoscanned grass, forest floor, mountain heath, lichen-covered rock, snow,
+  ploughed soil and hay meadow, blended per ground type, with surface relief (normal maps).
+  Cliffs are textured from the side so they do not smear. Each texture switches to a larger
+  scale with distance so no tiling pattern shows from altitude.
+- **Glacier:** snow surface with glossy blue ice where the glacier steepens, and dark
+  mirror-like meltwater lakes.
+- **Fjord:** dark reflective water with drifting ripples.
+- **Trees:** scanned fir and broadleaf tree models (the broadleaf is also used small, in
+  rows, for the orchards) in place of cones and spheres. They are over a million triangles
+  each and rely on Nanite, so they need a recent graphics card (roughly RTX 2060 or better).
+- **Light and air:** physically based sky, volumetric clouds and valley haze, Lumen global
+  illumination and reflections, light bloom and auto exposure. These are on even without
+  the asset step.
+
+What is still not realistic after this: buildings are plain white and red boxes, there is no
+grass or undergrowth geometry, the terrain mesh has one point every 8–12 m so close-up
+ground shapes are smooth, and the drone model is a box. For those, see
+*Making it look even better* at the end.
+
+If the script reports errors, paste the `[DroneSim setup]` lines from the Output Log and
+they can be fixed; each stage (ground, water, trees) runs independently, so a failure in one
+does not block the others.
 
 ## Landscapes
 
@@ -72,8 +112,8 @@ Two things most likely to need a tweak on first run:
 
 - **Ground invisible from above, or the drone falls through it:** tick *Flip Winding* on
   `DroneTerrain` (set the default in `DroneTerrain.h`).
-- **Ground is grey/untextured:** the engine's vertex-colour material was not found. Make a
-  material with a *Vertex Color* node wired to Base Color and assign it as `TerrainMaterial`.
+- **Ground is grey/untextured:** run the *Realistic graphics* step. (Without it the ground uses
+  the engine's vertex-colour material, which some engine versions do not load in game.)
 
 To fly in a map of your own instead, open it and set **World Settings → GameMode Override**
 to `DroneSimGameMode`. If the map contains a directional light, the built-in sky and
@@ -141,10 +181,9 @@ raise the throttle. On the ground, holding the throttle down stops the motors.
 
 Not simulated: obstacle sensing, GPS/compass errors, signal range, propeller sound, ground effect.
 
-## Making it look realistic
+## Making it look even better
 
-The realism of the picture comes from the environment and assets, which have to be added in the
-Unreal editor:
+Beyond the *Realistic graphics* step, further realism has to be added by hand in the Unreal editor:
 
 - **The same three places, properly dressed:** the `.r16` files import directly as Unreal
   Landscapes (Landscape mode → Import from File; 513 × 513, X/Y scale = grid spacing × 100,
