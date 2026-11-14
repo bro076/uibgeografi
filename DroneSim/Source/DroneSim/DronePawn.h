@@ -39,6 +39,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Drone") void SetStickMode(EDroneStickMode NewMode);
 	UFUNCTION(BlueprintCallable, Category = "Drone") void CycleCameraView();
 	UFUNCTION(BlueprintCallable, Category = "Drone") void CycleWind();
+	/** The remote's flight pause button: brake to a hover and cancel take-off, landing or return-to-home. */
+	UFUNCTION(BlueprintCallable, Category = "Drone") void PauseFlight();
 	UFUNCTION(BlueprintCallable, Category = "Drone") void ResetDrone();
 
 	/** Moves the take-off point to a spot on the ground (cm) and resets the drone there. FenceRadiusM <= 0 means no limit. */
@@ -56,6 +58,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone") float GetVerticalSpeed() const;       // m/s
 	UFUNCTION(BlueprintPure, Category = "Drone") float GetBatteryPercent() const { return BatteryPercent; }
 	UFUNCTION(BlueprintPure, Category = "Drone") float GetWindSpeed() const { return WindSpeed; }
+	UFUNCTION(BlueprintPure, Category = "Drone") float GetTemperatureC() const { return TemperatureC; }
+	UFUNCTION(BlueprintPure, Category = "Drone") bool IsInRain() const { return bRain; }
+
+	/** Which phone flies this drone (0-3). Slot 0 is also the keyboard / gamepad drone. */
+	UFUNCTION(BlueprintPure, Category = "Drone") int32 GetPhoneSlot() const { return PhoneSlot; }
+	void SetPhoneSlot(int32 Slot);
+
+	/** Called by the game mode every frame so all drones fly in the same weather. */
+	void SetWeather(float InWindSpeed, float InWindHeadingDeg, float InGustFraction, float InTemperatureC, bool bInRain);
 	UFUNCTION(BlueprintPure, Category = "Drone") float GetGimbalPitch() const { return GimbalPitch; }
 	UFUNCTION(BlueprintPure, Category = "Drone") FString GetWarningText() const { return WarningText; }
 	const FDroneSticks& GetRawSticks() const { return RawSticks; }
@@ -185,5 +196,9 @@ private:
 	float PropAngle = 0.f;
 	float TelemetryTimer = 0.f;
 	int32 WindPreset = 1;
+	int32 PhoneSlot = 0;
+	float TemperatureC = 12.f;
+	bool bRain = false;
+	double PauseBrakeTime = 0.0;   // seconds left of the flight-pause brake
 	FString WarningText;
 };

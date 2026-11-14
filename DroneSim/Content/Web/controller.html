@@ -71,6 +71,13 @@
   button.go { background: #1f5d33; border-color: #2c7a45; }
   button.danger { background: #6b2018; border-color: #8a2b20; }
   button.small { min-height: 32px; font-weight: 500; font-size: 12px; }
+  button:disabled { opacity: .4; }
+  /* Hold-to-confirm buttons fill up while held, like the press-and-hold actions on a DJI remote. */
+  button.hold { position: relative; overflow: hidden; }
+  button.hold::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,255,255,.28); }
+  button.hold.holding::after { width: 100%; transition: width .6s linear; }
+  #bPause { flex: 0 0 44px; }
+  #drone { font-weight: 700; padding: 2px 8px; border-radius: 10px; color: #111; background: #b9bec4; display: none; }
   #gimbal {
     position: relative; flex: none; height: 52px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
     display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 12px; overflow: hidden;
@@ -101,6 +108,7 @@
 <div id="app">
   <div id="bar">
     <div id="dot"></div>
+    <div id="drone"></div>
     <div id="status">Connecting…</div>
     <div class="sp"></div>
     <div class="tm"><span>H</span><b id="tH">0.0</b> m</div>
@@ -119,8 +127,9 @@
     <div id="mid">
       <div id="warn"></div>
       <div class="row">
-        <button id="bTakeoff" class="go">TAKE OFF</button>
-        <button id="bRth">RTH</button>
+        <button id="bTakeoff" class="go hold">TAKE OFF</button>
+        <button id="bPause" title="Flight pause">❚❚</button>
+        <button id="bRth" class="hold">RTH</button>
       </div>
       <div class="row">
         <button id="bM0" data-mode="0">C</button>
@@ -164,9 +173,8 @@
 </div>
 
 <div class="overlay" id="spectate">
-  <h1>Another phone is flying</h1>
-  <p>You are watching the telemetry. Take control when it is your turn.</p>
-  <button id="bClaim" class="go">Take control</button>
+  <h1>All four drones are taken</h1>
+  <p>You are watching drone 1. You get a drone automatically as soon as another phone disconnects.</p>
 </div>
 
 <div class="overlay" id="rotate">
@@ -224,11 +232,19 @@
   }, 33);
 
   // ---------------------------------------------------------------- telemetry
-  // t|role|state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|wind|scene|warning
+  // t|role|state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|weather|scene|warning
+  // role is P1..P4 (this phone flies that drone) or S (spectating drone 1)
+  var DRONE_COLOURS = ['#b9bec4', '#f08a3c', '#4c8dff', '#f2cf3a'];
   function onMessage(text) {
     var p = text.split('|');
     if (p[0] !== 't' || p.length < 14) { return; }
-    var pilot = p[1] === 'P';
+    var pilot = p[1].charAt(0) === 'P';
+    var droneNumber = pilot ? parseInt(p[1].slice(1), 10) || 1 : 0;
+    $('drone').style.display = pilot ? 'block' : 'none';
+    $('drone').textContent = 'Drone ' + droneNumber;
+    $('drone').style.background = DRONE_COLOURS[droneNumber - 1] || DRONE_COLOURS[0];
+    // Weather and landscape are shared by everyone: only drone 1 (the instructor) can change them.
+    $('bWind').disabled = $('bScene').disabled = droneNumber !== 1;
     var state = parseInt(p[2], 10), mode = parseInt(p[3], 10), atti = p[4] === '1', stickMode = parseInt(p[5], 10);
     var battery = parseFloat(p[10]);
     var warning = p[14] || '';
@@ -246,11 +262,11 @@
 
     var onGround = state === 0 || state === 1;
     $('bTakeoff').textContent = onGround ? 'TAKE OFF' : (state === 4 ? 'CANCEL' : 'LAND');
-    $('bTakeoff').className = onGround ? 'go' : '';
-    $('bRth').className = state === 5 ? 'on' : '';
+    setBase($('bTakeoff'), onGround ? 'go hold' : 'hold');
+    setBase($('bRth'), state === 5 ? 'on hold' : 'hold');
     for (var i = 0; i < 3; i++) { $('bM' + i).className = i === mode ? 'on' : ''; }
     $('bAtti').className = atti ? 'on' : '';
-    $('bWind').textContent = 'Wind: ' + p[12] + ' m/s';
+    $('bWind').textContent = 'Weather: ' + p[12];
 
     var labels = STICK_LABELS[stickMode] || STICK_LABELS[1];
     $('lblL').textContent = labels[0];
@@ -340,14 +356,34 @@
   document.addEventListener('visibilitychange', function () { if (document.hidden) { centreAll(); } });
 
   // ---------------------------------------------------------------- buttons
-  $('bTakeoff').onclick = function () { command('takeoff'); };
-  $('bRth').onclick = function () { command('rth'); };
+  // Take-off / landing and return-to-home need a 0.6 s hold, so a stray touch does nothing.
+  function setBase(button, classes) {
+    button.className = classes + (button.classList.contains('holding') ? ' holding' : '');
+  }
+  function holdButton(button, action) {
+    var timer = null;
+    function cancel() {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      button.classList.remove('holding');
+    }
+    button.addEventListener('pointerdown', function (e) {
+      e.preventDefault();
+      cancel();
+      button.classList.add('holding');
+      timer = setTimeout(function () { timer = null; button.classList.remove('holding'); action(); }, 600);
+    });
+    button.addEventListener('pointerup', cancel);
+    button.addEventListener('pointercancel', cancel);
+    button.addEventListener('pointerleave', cancel);
+  }
+  holdButton($('bTakeoff'), function () { command('takeoff'); });
+  holdButton($('bRth'), function () { command('rth'); });
+  $('bPause').onclick = function () { command('pause'); };
   $('bCam').onclick = function () { command('camera'); };
   $('bAtti').onclick = function () { command('atti'); };
   $('bWind').onclick = function () { command('wind'); };
   $('bScene').onclick = function () { command('scene'); $('menu').className = 'overlay'; };
   $('bReset').onclick = function () { command('reset'); $('menu').className = 'overlay'; };
-  $('bClaim').onclick = function () { command('claim'); };
   $('bMenu').onclick = function () { $('menu').className = 'overlay show'; };
   $('bClose').onclick = function () { $('menu').className = 'overlay'; };
   $('bFull').onclick = function () {

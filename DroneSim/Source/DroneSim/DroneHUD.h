@@ -17,6 +17,7 @@ public:
 private:
 	void DrawStick(float CenterX, float CenterY, float HalfSize, float X, float Y, const FString& Label, float TextScale);
 	void DrawPairingPanel(float Scale, float TextScale, const FString& Url, int32 NumPhones);
+	void DrawRain();
 
 	bool bShowHelp = true;
 	bool bShowQr = true;

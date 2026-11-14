@@ -78,6 +78,15 @@ void ADroneHUD::DrawHUD()
 		if (PC->WasInputKeyJustPressed(EKeys::Q)) { bShowQr = !bShowQr; }
 	}
 
+	// With several drones the screen is split; shared panels (pairing, help) go on the first player's view only.
+	const APlayerController* Owner = GetOwningPlayerController();
+	const bool bPrimary = !Owner || Owner->IsPrimaryPlayer();
+
+	if (Drone->IsInRain())
+	{
+		DrawRain();
+	}
+
 	UFont* Font = GEngine->GetMediumFont();
 	const float W = static_cast<float>(Canvas->SizeX);
 	const float H = static_cast<float>(Canvas->SizeY);
@@ -95,11 +104,12 @@ void ADroneHUD::DrawHUD()
 		DrawText(SceneName, Dim, Margin + 10.f * S, Margin + 8.f * S + Line * 3.f, Font, T);
 	}
 	const int32 StickModeIndex = FMath::Clamp(static_cast<int32>(Drone->GetStickMode()), 0, 2);
-	DrawText(FString::Printf(TEXT("%s  -  %s%s"), StateName(Drone->GetDroneState()), ModeName(Drone->GetFlightMode()), Drone->IsAtti() ? TEXT(" / ATTI") : TEXT(" / GPS")),
+	DrawText(FString::Printf(TEXT("Drone %d:  %s  -  %s%s"), Drone->GetPhoneSlot() + 1, StateName(Drone->GetDroneState()), ModeName(Drone->GetFlightMode()), Drone->IsAtti() ? TEXT(" / ATTI") : TEXT(" / GPS")),
 		Drone->GetDroneState() == EDroneState::Crashed ? Bad : White, Margin + 10.f * S, Margin + 8.f * S, Font, T);
 	DrawText(FString::Printf(TEXT("%s   Gimbal %.0f deg"), ViewName(Drone->GetCameraView()), Drone->GetGimbalPitch()),
 		Dim, Margin + 10.f * S, Margin + 8.f * S + Line, Font, T);
-	DrawText(FString::Printf(TEXT("Stick mode %d   Wind %.0f m/s"), StickModeIndex + 1, Drone->GetWindSpeed()),
+	DrawText(FString::Printf(TEXT("Stick mode %d   %s   %.0f C"), StickModeIndex + 1,
+			GameMode ? *GameMode->GetWeatherLabel() : *FString::Printf(TEXT("Wind %.0f m/s"), Drone->GetWindSpeed()), Drone->GetTemperatureC()),
 		Dim, Margin + 10.f * S, Margin + 8.f * S + Line * 2.f, Font, T);
 
 	// ---- Top centre: battery
@@ -146,10 +156,13 @@ void ADroneHUD::DrawHUD()
 			NumPhones = Phone->GetNumPhones();
 		}
 	}
-	DrawPairingPanel(S, T, Url, NumPhones);
+	if (bPrimary)
+	{
+		DrawPairingPanel(S, T, Url, NumPhones);
+	}
 
 	// ---- Help
-	if (bShowHelp)
+	if (bShowHelp && bPrimary)
 	{
 		static const TCHAR* HelpLines[] =
 		{
@@ -157,7 +170,7 @@ void ADroneHUD::DrawHUD()
 			TEXT("Left stick  W A S D              Right stick  arrow keys      (or a gamepad / phone)"),
 			TEXT("T  take off / land               H  return to home            R  reset"),
 			TEXT("1 2 3  Cine / Normal / Sport     4  ATTI (no GPS hold)        M  stick mode"),
-			TEXT("C  camera view                   PgUp PgDn  gimbal tilt       G  wind"),
+			TEXT("C  camera view                   PgUp PgDn  gimbal tilt       G  weather      Space  pause / brake"),
 			TEXT("Start motors by hand: hold both sticks down and inward, then raise the throttle"),
 		};
 		const int32 NumLines = UE_ARRAY_COUNT(HelpLines);
@@ -169,6 +182,21 @@ void ADroneHUD::DrawHUD()
 		{
 			DrawText(HelpLines[i], Dim, HelpX + 10.f * S, HelpY + 8.f * S + Line * i, Font, T * 0.85f);
 		}
+	}
+}
+
+void ADroneHUD::DrawRain()
+{
+	// Streaks across the view. Cheap, but it makes "it has started raining" impossible to miss.
+	const float W = static_cast<float>(Canvas->SizeX);
+	const float H = static_cast<float>(Canvas->SizeY);
+	const float Length = H * 0.06f;
+	const FLinearColor Streak(0.8f, 0.85f, 0.9f, 0.22f);
+	for (int32 i = 0; i < 90; ++i)
+	{
+		const float X = FMath::FRandRange(0.f, W);
+		const float Y = FMath::FRandRange(-Length, H);
+		DrawLine(X, Y, X - Length * 0.25f, Y + Length, Streak, 1.f);
 	}
 }
 

@@ -10,7 +10,8 @@ with the option to use a phone as the remote controller.
 > code generator (output decoded successfully), and the elevation files and ground-type rules
 > for the three landscapes (previewed as top-down maps), and the asset downloader (every file
 > fetched successfully). The landscapes have not been seen rendered in Unreal, and the editor
-> script that builds the realistic materials has never been run.
+> script that builds the realistic materials has never been run. Split-screen multi-drone play
+> and the weather system are likewise untested in the engine.
 
 ## What is in it
 
@@ -132,13 +133,33 @@ Things to know:
   private networks. Many school/university Wi-Fi networks block device-to-device traffic
   ("client isolation"); if phones cannot load the page, use a phone hotspot or a small
   travel router.
-- The first phone to connect is the pilot. Others see telemetry only and get a
-  **Take control** button, so the phone can be "handed over" between students.
-- If the pilot phone stops sending for half a second, the sticks read as centred and the drone hovers.
+- Each phone gets its own drone — see *Flying together* below.
+- If a phone stops sending for half a second, its sticks read as centred and its drone hovers.
+- **Take off / Land** and **RTH** must be held for 0.6 s, like the press-and-hold actions on a
+  DJI remote. **❚❚** is the flight pause button: it brakes to a hover and cancels an automatic
+  take-off, landing or return-to-home.
 - If the shown address is wrong (PCs with several network adapters), use the PC's Wi-Fi IPv4 address
   with the same port. The port is `PhonePort` in `Config/DefaultGame.ini`.
 - A phone has no physical sticks, so it trains stick logic and orientation, not finger feel.
   A USB gamepad is closer to a real remote and works at the same time.
+
+## Flying together
+
+Up to **four students fly in the same world at once**, on one PC and one screen:
+
+- The first four phones to connect each get their own drone (grey, orange, blue, yellow),
+  lined up 2.5 m apart at the take-off point. The phone shows which drone it flies.
+- The screen splits so every pilot has their own camera view and telemetry. Use a projector
+  or large display.
+- Drones can collide with each other, and everyone shares the same weather.
+- Drone 1 is the instructor's: it also responds to the keyboard and first gamepad, and only
+  it can change the weather or the landscape. Extra gamepads control drones 2–4.
+- A fifth phone watches drone 1's telemetry and is given a drone as soon as one frees up.
+  A drone is removed 15 s after its phone disconnects.
+
+Rendering four views costs roughly four times the graphics work; lower the resolution or
+quality settings if it stutters. Flying together across several PCs over the network is
+not implemented.
 
 ## Controls
 
@@ -153,9 +174,10 @@ Things to know:
 | Stick mode 1 / 2 / 3 | M cycles | – | Menu |
 | Camera view (FPV / chase / pilot) | C | Y | VIEW |
 | Gimbal tilt | PgUp / PgDn | triggers | GIMBAL slider |
-| Wind: calm / 3 / 7 / 11 m/s | G | – | Menu |
+| Weather (next type) | G | – | Menu (drone 1 only) |
+| Flight pause / brake | Space | Start | ❚❚ |
 | Reset | R | – | Menu |
-| Next landscape | F2 | – | Menu |
+| Next landscape | F2 | – | Menu (drone 1 only) |
 | Help / QR code on-off | F1 / Q | – | – |
 
 Motors can also be started the DJI way: hold both sticks down and inward for a moment, then
@@ -168,12 +190,20 @@ raise the throttle. On the ground, holding the throttle down stops the motors.
   editable on the pawn.
 - **ATTI mode:** sticks command tilt, nothing holds position, the drone drifts with wind and
   momentum. This is the mode that teaches real manual control.
-- **Aircraft response:** tilt lag, thrust limit, drag, gravity, wind with gusts and stronger
-  wind at height. The drone leans into the wind to hold position and loses ground if the wind
+- **Aircraft response:** tilt lag, thrust limit, drag, gravity, gusty wind that is stronger
+  at height. The drone leans into the wind to hold position and loses ground if the wind
   exceeds what the mode's tilt limit can fight.
 - **Flight controller behaviours:** auto take-off to 1.2 m, auto landing, return-to-home (climb
   to 30 m, fly back, land), slowed descent near the ground, 120 m height ceiling, low-battery
   RTH and forced landing, home point recorded at take-off.
+- **Weather:** Calm, Breezy, Overcast and windy, Fog, Rain squall, and *Changing weather*, which
+  drifts between them every minute or two with a gradual transition, so conditions worsen
+  mid-flight. Weather sets wind strength and gustiness, visibility (fog can hide the drone
+  from the pilot view within about 100 m), daylight and temperature. The wind direction
+  wanders. Rain shows as streaks and a "land as soon as possible" warning; it does not damage
+  the drone.
+- **Cold:** temperature falls with altitude, so the glacier is below freezing in bad weather,
+  and the battery drains 2 % faster per degree below 15 °C.
 - **Mistakes have consequences:** hitting the ground faster than 3.5 m/s or an obstacle faster
   than 1.5 m/s is a crash.
 - **Pilot view:** the camera stands at the take-off point and watches the drone, for practising

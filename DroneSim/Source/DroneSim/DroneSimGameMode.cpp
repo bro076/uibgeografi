@@ -3,6 +3,7 @@
 #include "DroneHUD.h"
 #include "DronePawn.h"
 #include "DroneTerrain.h"
+#include "PhoneControllerSubsystem.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/ExponentialHeightFogComponent.h"
 #include "Components/SkyAtmosphereComponent.h"
@@ -10,10 +11,12 @@
 #include "Components/VolumetricCloudComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/ExponentialHeightFog.h"
+#include "Engine/GameInstance.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/SkyLight.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -35,12 +38,37 @@ namespace
 		{ TEXT("Hardanger - farms and orchards"), TEXT("orchards.r16"), 8.f, EDroneBiome::Farmland },
 	};
 	const int32 NumScenes = UE_ARRAY_COUNT(Scenes);
+
+	struct FDroneWeather
+	{
+		const TCHAR* Name;
+		float WindSpeed;       // mean, m/s
+		float GustFraction;    // gust size relative to the mean
+		float FogDensity;      // exponential height fog density; 0.09 is roughly 100 m visibility
+		float SunIntensity;    // lux scale of the directional light
+		float Rain;            // 0 or 1
+		float TemperatureC;    // at sea level
+	};
+
+	const FDroneWeather WeatherTypes[] =
+	{
+		{ TEXT("Calm"), 1.f, 0.3f, 0.004f, 9.5f, 0.f, 14.f },
+		{ TEXT("Breezy"), 5.f, 0.5f, 0.006f, 9.f, 0.f, 12.f },
+		{ TEXT("Overcast, windy"), 9.f, 0.6f, 0.014f, 3.5f, 0.f, 9.f },
+		{ TEXT("Fog"), 2.f, 0.3f, 0.09f, 2.5f, 0.f, 6.f },
+		{ TEXT("Rain squall"), 13.f, 0.8f, 0.03f, 1.8f, 1.f, 5.f },
+	};
+	const int32 NumWeatherTypes = UE_ARRAY_COUNT(WeatherTypes);
+
+	const float DroneSpacingM = 2.5f;        // take-off points are lined up eastward
+	const float PhoneGoneSeconds = 15.f;     // a drone is removed this long after its phone disconnects
 }
 
 ADroneSimGameMode::ADroneSimGameMode()
 {
 	DefaultPawnClass = ADronePawn::StaticClass();
 	HUDClass = ADroneHUD::StaticClass();
+	PrimaryActorTick.bCanEverTick = true;
 }
 
 void ADroneSimGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
@@ -87,6 +115,7 @@ void ADroneSimGameMode::SpawnSky()
 		{
 			Light->SetIntensity(9.f);
 			Light->SetAtmosphereSunLight(true);
+			SunLight = Light;
 		}
 	}
 
@@ -100,6 +129,7 @@ void ADroneSimGameMode::SpawnSky()
 			Light->SetMobility(EComponentMobility::Movable);
 			Light->bRealTimeCapture = true;   // light the scene from the atmosphere and clouds
 			Light->MarkRenderStateDirty();
+			SkyLight = Light;
 		}
 	}
 
@@ -109,6 +139,7 @@ void ADroneSimGameMode::SpawnSky()
 		{
 			Component->SetFogDensity(0.006f);
 			Component->SetVolumetricFog(true);   // soft light shafts and haze in the valleys
+			Fog = Component;
 		}
 	}
 
@@ -162,11 +193,11 @@ void ADroneSimGameMode::LoadScene(int32 Index)
 	}
 
 	// Drones that already exist (scene switch during play) move to the new take-off point.
-	FVector Spawn;
-	float FenceRadiusM = 0.f;
-	if (GetSceneSpawn(Spawn, FenceRadiusM))
+	for (TActorIterator<ADronePawn> It(World); It; ++It)
 	{
-		for (TActorIterator<ADronePawn> It(World); It; ++It)
+		FVector Spawn;
+		float FenceRadiusM = 0.f;
+		if (GetSceneSpawn(It->GetPhoneSlot(), Spawn, FenceRadiusM))
 		{
 			It->SetSpawnPoint(Spawn, FenceRadiusM);
 		}
@@ -178,14 +209,163 @@ FString ADroneSimGameMode::GetSceneName() const
 	return (bBuiltInScenes && SceneIndex >= 0) ? FString(Scenes[SceneIndex].Name) : FString();
 }
 
-bool ADroneSimGameMode::GetSceneSpawn(FVector& OutLocation, float& OutFenceRadiusM) const
+bool ADroneSimGameMode::GetSceneSpawn(int32 Slot, FVector& OutLocation, float& OutFenceRadiusM) const
 {
 	if (!Terrain)
 	{
 		return false;
 	}
-	// The terrain file is centred on the take-off point.
-	OutLocation = FVector(0.0, 0.0, Terrain->GetHeightM(0.0, 0.0) * 100.0);
+	// The terrain file is centred on the take-off point; further drones line up to the east of it.
+	const double EastM = FMath::Max(Slot, 0) * DroneSpacingM;
+	OutLocation = FVector(0.0, EastM * 100.0, Terrain->GetHeightM(0.0, EastM) * 100.0);
 	OutFenceRadiusM = Terrain->GetHalfExtentM() - 150.f;
 	return true;
+}
+
+void ADroneSimGameMode::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UpdateWeather(DeltaSeconds);
+	UpdatePhonePlayers(DeltaSeconds);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Weather
+// ---------------------------------------------------------------------------------------------
+
+void ADroneSimGameMode::CycleWeather()
+{
+	// Calm -> Breezy -> Overcast -> Fog -> Rain squall -> Changing weather -> Calm ...
+	if (bChangingWeather)
+	{
+		bChangingWeather = false;
+		WeatherIndex = 0;
+	}
+	else if (WeatherIndex + 1 < NumWeatherTypes)
+	{
+		++WeatherIndex;
+	}
+	else
+	{
+		bChangingWeather = true;
+		NextWeatherChange = WeatherTime + 20.f;   // first change comes quickly so the mode is noticeable
+	}
+}
+
+FString ADroneSimGameMode::GetWeatherLabel() const
+{
+	return FString::Printf(TEXT("%s%s %.0f m/s"), bChangingWeather ? TEXT("Changing: ") : TEXT(""), WeatherTypes[WeatherIndex].Name, WindSpeed);
+}
+
+void ADroneSimGameMode::UpdateWeather(float DeltaSeconds)
+{
+	WeatherTime += DeltaSeconds;
+
+	if (bChangingWeather && WeatherTime >= NextWeatherChange)
+	{
+		// Move to a different type; weather usually shifts to something nearby, sometimes jumps.
+		int32 Next = WeatherIndex + (FMath::RandBool() ? 1 : -1);
+		if (FMath::FRand() < 0.25f || Next < 0 || Next >= NumWeatherTypes)
+		{
+			Next = FMath::RandRange(0, NumWeatherTypes - 1);
+		}
+		if (Next == WeatherIndex)
+		{
+			Next = (WeatherIndex + 1) % NumWeatherTypes;
+		}
+		WeatherIndex = Next;
+		NextWeatherChange = WeatherTime + FMath::FRandRange(WeatherChangeMinSeconds, FMath::Max(WeatherChangeMinSeconds, WeatherChangeMaxSeconds));
+	}
+
+	// Ease every value towards the current type.
+	const FDroneWeather& Target = WeatherTypes[WeatherIndex];
+	const float Blend = 1.f - FMath::Exp(-DeltaSeconds * 3.f / FMath::Max(WeatherTransitionSeconds, 0.1f));
+	WindSpeed = FMath::Lerp(WindSpeed, Target.WindSpeed, Blend);
+	GustFraction = FMath::Lerp(GustFraction, Target.GustFraction, Blend);
+	FogDensity = FMath::Lerp(FogDensity, Target.FogDensity, Blend);
+	SunIntensity = FMath::Lerp(SunIntensity, Target.SunIntensity, Blend);
+	RainAmount = FMath::Lerp(RainAmount, Target.Rain, Blend);
+
+	// The wind direction wanders slowly, faster in unsettled weather.
+	WindHeadingDeg += FMath::PerlinNoise1D(WeatherTime * 0.02f) * (bChangingWeather ? 4.f : 1.5f) * DeltaSeconds;
+
+	// About 6.5 degrees colder per 1000 m: the glacier take-off point is well below freezing in bad weather.
+	float GroundHeightM = 0.f;
+	if (Terrain)
+	{
+		GroundHeightM = Terrain->GetHeightM(0.0, 0.0);
+	}
+	TemperatureC = FMath::Lerp(TemperatureC, Target.TemperatureC - 0.0065f * GroundHeightM, Blend);
+
+	// Sky, when this game mode built it.
+	if (SunLight)
+	{
+		SunLight->SetIntensity(SunIntensity);
+	}
+	if (SkyLight)
+	{
+		SkyLight->SetIntensity(FMath::GetMappedRangeValueClamped(FVector2f(1.8f, 9.5f), FVector2f(0.6f, 1.f), SunIntensity));
+	}
+	if (Fog)
+	{
+		Fog->SetFogDensity(FogDensity);
+	}
+
+	for (TActorIterator<ADronePawn> It(GetWorld()); It; ++It)
+	{
+		It->SetWeather(WindSpeed, WindHeadingDeg, GustFraction, TemperatureC, RainAmount > 0.5f);
+	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// One drone per phone
+// ---------------------------------------------------------------------------------------------
+
+void ADroneSimGameMode::UpdatePhonePlayers(float DeltaSeconds)
+{
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UPhoneControllerSubsystem* Phone = GameInstance ? GameInstance->GetSubsystem<UPhoneControllerSubsystem>() : nullptr;
+	if (!Phone)
+	{
+		return;
+	}
+
+	// Slot 0 is the player that always exists (keyboard, gamepad and the first phone).
+	for (int32 Slot = 1; Slot < UPhoneControllerSubsystem::MaxSlots; ++Slot)
+	{
+		const bool bPhoneConnected = Phone->IsSlotActive(Slot);
+		TObjectPtr<APlayerController>* Existing = SlotControllers.Find(Slot);
+
+		if (bPhoneConnected)
+		{
+			SlotIdleSeconds.Remove(Slot);
+			if (!Existing)
+			{
+				// A new local player gets its own controller, drone, HUD and a share of the screen.
+				if (APlayerController* Controller = UGameplayStatics::CreatePlayer(this, -1, true))
+				{
+					SlotControllers.Add(Slot, Controller);
+					if (ADronePawn* Drone = Cast<ADronePawn>(Controller->GetPawn()))
+					{
+						Drone->SetPhoneSlot(Slot);
+					}
+				}
+			}
+		}
+		else if (Existing)
+		{
+			// Keep the drone for a while so a dropped connection or a page reload does not lose it.
+			float& Idle = SlotIdleSeconds.FindOrAdd(Slot);
+			Idle += DeltaSeconds;
+			if (Idle > PhoneGoneSeconds)
+			{
+				if (APlayerController* Controller = Existing->Get())
+				{
+					UGameplayStatics::RemovePlayer(Controller, true);
+				}
+				SlotControllers.Remove(Slot);
+				SlotIdleSeconds.Remove(Slot);
+			}
+		}
+	}
 }

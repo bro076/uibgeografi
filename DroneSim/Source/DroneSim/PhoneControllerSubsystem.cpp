@@ -19,6 +19,8 @@ struct FPhoneClient
 {
 	FSocket* Socket = nullptr;
 	int32 Id = 0;
+	int32 Slot = -1;            // which drone this phone flies, -1 = spectator
+	TArray<FString> Commands;
 	TArray<uint8> In;
 	TArray<uint8> Out;
 	bool bWebSocket = false;
@@ -164,11 +166,15 @@ int32 UPhoneControllerSubsystem::GetNumPhones() const
 	return Count;
 }
 
-FPhoneClient* UPhoneControllerSubsystem::FindPilot() const
+FPhoneClient* UPhoneControllerSubsystem::FindSlot(int32 Slot) const
 {
+	if (Slot < 0)
+	{
+		return nullptr;
+	}
 	for (const TSharedPtr<FPhoneClient>& Client : Clients)
 	{
-		if (Client->Id == PilotId && Client->bWebSocket && !Client->bClosed)
+		if (Client->Slot == Slot && Client->bWebSocket && !Client->bClosed)
 		{
 			return Client.Get();
 		}
@@ -176,31 +182,47 @@ FPhoneClient* UPhoneControllerSubsystem::FindPilot() const
 	return nullptr;
 }
 
-bool UPhoneControllerSubsystem::GetPilotSticks(FDroneSticks& OutSticks) const
+bool UPhoneControllerSubsystem::IsSlotActive(int32 Slot) const
 {
-	const FPhoneClient* Pilot = FindPilot();
-	if (!Pilot || FPlatformTime::Seconds() - Pilot->LastSticks > StickTimeoutSeconds)
+	return FindSlot(Slot) != nullptr;
+}
+
+bool UPhoneControllerSubsystem::GetSticks(int32 Slot, FDroneSticks& OutSticks) const
+{
+	const FPhoneClient* Phone = FindSlot(Slot);
+	if (!Phone || FPlatformTime::Seconds() - Phone->LastSticks > StickTimeoutSeconds)
 	{
 		return false;
 	}
-	OutSticks = Pilot->Sticks;
+	OutSticks = Phone->Sticks;
 	return true;
 }
 
-void UPhoneControllerSubsystem::ConsumeCommands(TArray<FString>& OutCommands)
+void UPhoneControllerSubsystem::ConsumeCommands(int32 Slot, TArray<FString>& OutCommands)
 {
-	OutCommands = MoveTemp(PendingCommands);
-	PendingCommands.Reset();
+	OutCommands.Reset();
+	if (FPhoneClient* Phone = FindSlot(Slot))
+	{
+		OutCommands = MoveTemp(Phone->Commands);
+		Phone->Commands.Reset();
+	}
 }
 
-void UPhoneControllerSubsystem::BroadcastTelemetry(const FString& Fields)
+void UPhoneControllerSubsystem::SendTelemetry(int32 Slot, const FString& Fields)
 {
 	for (const TSharedPtr<FPhoneClient>& Client : Clients)
 	{
-		if (Client->bWebSocket && !Client->bClosed)
+		if (!Client->bWebSocket || Client->bClosed)
 		{
-			const TCHAR* Role = Client->Id == PilotId ? TEXT("P") : TEXT("S");
-			QueueText(*Client, FString::Printf(TEXT("t|%s|%s"), Role, *Fields));
+			continue;
+		}
+		if (Client->Slot == Slot)
+		{
+			QueueText(*Client, FString::Printf(TEXT("t|P%d|%s"), Slot + 1, *Fields));
+		}
+		else if (Client->Slot < 0 && Slot == 0)
+		{
+			QueueText(*Client, FString::Printf(TEXT("t|S|%s"), *Fields));
 		}
 	}
 }
@@ -216,16 +238,19 @@ bool UPhoneControllerSubsystem::OnTick(float DeltaTime)
 
 	Clients.RemoveAll([](const TSharedPtr<FPhoneClient>& Client) { return Client->bClosed; });
 
-	// Hand the pilot seat to the longest-connected phone if the pilot left.
-	if (FindPilot() == nullptr)
+	// Give waiting phones a drone as slots free up, longest-connected first.
+	for (const TSharedPtr<FPhoneClient>& Client : Clients)
 	{
-		PilotId = 0;
-		for (const TSharedPtr<FPhoneClient>& Client : Clients)
+		if (Client->bWebSocket && Client->Slot < 0)
 		{
-			if (Client->bWebSocket)
+			for (int32 Slot = 0; Slot < MaxSlots; ++Slot)
 			{
-				PilotId = Client->Id;
-				break;
+				if (FindSlot(Slot) == nullptr)
+				{
+					Client->Slot = Slot;
+					UE_LOG(LogDronePhone, Log, TEXT("Phone %d now flies drone %d"), Client->Id, Slot + 1);
+					break;
+				}
 			}
 		}
 	}
@@ -482,13 +507,9 @@ void UPhoneControllerSubsystem::HandleText(FPhoneClient& Client, const FString& 
 	}
 	else if (Parts[0] == TEXT("c"))
 	{
-		if (Parts[1] == TEXT("claim"))
+		if (Client.Slot >= 0 && Client.Commands.Num() < 32)
 		{
-			PilotId = Client.Id;
-		}
-		else if (Client.Id == PilotId && PendingCommands.Num() < 32)
-		{
-			PendingCommands.Add(Parts.Num() > 2 ? Parts[1] + TEXT("|") + Parts[2] : Parts[1]);
+			Client.Commands.Add(Parts.Num() > 2 ? Parts[1] + TEXT("|") + Parts[2] : Parts[1]);
 		}
 	}
 }

@@ -143,7 +143,7 @@ void ADronePawn::BeginPlay()
 	{
 		FVector Spawn;
 		float Fence = 0.f;
-		if (GameMode->GetSceneSpawn(Spawn, Fence))
+		if (GameMode->GetSceneSpawn(PhoneSlot, Spawn, Fence))
 		{
 			SetSpawnPoint(Spawn, Fence);
 		}
@@ -279,6 +279,7 @@ void ADronePawn::GatherInput(float DeltaSeconds)
 			SetStickMode(static_cast<EDroneStickMode>((static_cast<int32>(StickMode) + 1) % 3));
 		}
 		if (PC->WasInputKeyJustPressed(EKeys::G)) { CycleWind(); }
+		if (PC->WasInputKeyJustPressed(EKeys::SpaceBar) || PC->WasInputKeyJustPressed(EKeys::Gamepad_Special_Right)) { PauseFlight(); }
 		if (PC->WasInputKeyJustPressed(EKeys::R)) { ResetDrone(); }
 		if (PC->WasInputKeyJustPressed(EKeys::F2)) { HandleCommand(TEXT("scene")); }
 	}
@@ -289,7 +290,7 @@ void ADronePawn::GatherInput(float DeltaSeconds)
 		if (UPhoneControllerSubsystem* Phone = GameInstance->GetSubsystem<UPhoneControllerSubsystem>())
 		{
 			FDroneSticks PhoneSticks;
-			if (Phone->GetPilotSticks(PhoneSticks))
+			if (Phone->GetSticks(PhoneSlot, PhoneSticks))
 			{
 				Sticks.LeftX += PhoneSticks.LeftX;
 				Sticks.LeftY += PhoneSticks.LeftY;
@@ -299,7 +300,7 @@ void ADronePawn::GatherInput(float DeltaSeconds)
 			}
 
 			TArray<FString> Commands;
-			Phone->ConsumeCommands(Commands);
+			Phone->ConsumeCommands(PhoneSlot, Commands);
 			for (const FString& Command : Commands)
 			{
 				HandleCommand(Command);
@@ -344,9 +345,11 @@ void ADronePawn::HandleCommand(const FString& Command)
 	else if (Name == TEXT("atti")) { ToggleAtti(); }
 	else if (Name == TEXT("stickmode")) { SetStickMode(static_cast<EDroneStickMode>(FMath::Clamp(Value, 0, 2))); }
 	else if (Name == TEXT("camera")) { CycleCameraView(); }
-	else if (Name == TEXT("wind")) { CycleWind(); }
+	else if (Name == TEXT("pause")) { PauseFlight(); }
 	else if (Name == TEXT("reset")) { ResetDrone(); }
-	else if (Name == TEXT("scene"))
+	// Weather and landscape are shared by everyone, so only drone 1 (the instructor's) may change them.
+	else if (Name == TEXT("wind") && PhoneSlot == 0) { CycleWind(); }
+	else if (Name == TEXT("scene") && PhoneSlot == 0)
 	{
 		if (ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>())
 		{
@@ -471,8 +474,70 @@ void ADronePawn::CycleCameraView()
 
 void ADronePawn::CycleWind()
 {
+	if (ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>())
+	{
+		GameMode->CycleWeather();   // comes back to every drone through SetWeather
+		return;
+	}
 	WindPreset = (WindPreset + 1) % static_cast<int32>(UE_ARRAY_COUNT(WindPresets));
 	WindSpeed = WindPresets[WindPreset];
+}
+
+void ADronePawn::SetWeather(float InWindSpeed, float InWindHeadingDeg, float InGustFraction, float InTemperatureC, bool bInRain)
+{
+	WindSpeed = InWindSpeed;
+	WindHeadingDeg = InWindHeadingDeg;
+	GustFraction = InGustFraction;
+	TemperatureC = InTemperatureC;
+	bRain = bInRain;
+}
+
+void ADronePawn::PauseFlight()
+{
+	if (State == EDroneState::TakingOff || State == EDroneState::Landing || State == EDroneState::ReturningHome)
+	{
+		if (BatteryPercent > CriticalBatteryPercent && !bOnGround)
+		{
+			State = EDroneState::Flying;
+		}
+	}
+	if (State == EDroneState::Flying)
+	{
+		PauseBrakeTime = 1.5;   // ignore the sticks and brake hard, even in ATTI
+	}
+}
+
+void ADronePawn::SetPhoneSlot(int32 Slot)
+{
+	PhoneSlot = FMath::Clamp(Slot, 0, 3);
+
+	// Body colour tells the drones apart: grey, orange, blue, yellow.
+	static const FLinearColor SlotColors[] =
+	{
+		FLinearColor(0.18f, 0.19f, 0.2f), FLinearColor(0.9f, 0.3f, 0.03f), FLinearColor(0.05f, 0.25f, 0.9f), FLinearColor(0.9f, 0.75f, 0.05f)
+	};
+	if (Parts.Num() > 0 && Parts[0])
+	{
+		if (UMaterialInstanceDynamic* Material = Parts[0]->CreateDynamicMaterialInstance(0))
+		{
+			Material->SetVectorParameterValue(TEXT("Color"), SlotColors[PhoneSlot]);
+		}
+	}
+
+	FVector Spawn;
+	float Fence = 0.f;
+	const ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>();
+	if (GameMode && GameMode->GetSceneSpawn(PhoneSlot, Spawn, Fence))
+	{
+		SetSpawnPoint(Spawn, Fence);
+	}
+	else
+	{
+		// Custom map: step aside from the player start and let Tick find the ground again.
+		SetActorLocation(GetActorLocation() + FVector(0.0, 250.0 * PhoneSlot, 0.0), false);
+		bPlaced = false;
+		PlaceTimer = 0.f;
+	}
 }
 
 void ADronePawn::SetSpawnPoint(const FVector& GroundLocation, float InFenceRadiusM)
@@ -649,6 +714,14 @@ void ADronePawn::Simulate(double Dt)
 		ClimbCommand = Axes.Throttle >= 0.0 ? Axes.Throttle * Limits.MaxAscent : Axes.Throttle * Limits.MaxDescent;
 		YawRateCommand = Axes.Yaw * Limits.MaxYawRateDeg;
 		bDirectTilt = bAtti;
+		if (PauseBrakeTime > 0.0)
+		{
+			PauseBrakeTime -= Dt;
+			VelocityCommand = FVector2D::ZeroVector;
+			ClimbCommand = 0.0;
+			YawRateCommand = 0.0;
+			bDirectTilt = false;
+		}
 
 		// Holding the throttle down while sitting on the ground stops the motors.
 		if (bOnGround && Axes.Throttle < -0.8)
@@ -817,7 +890,9 @@ void ADronePawn::UpdateBatteryAndWarnings(float DeltaSeconds)
 	{
 		// Power rises roughly with thrust^1.5; idling on the ground costs little.
 		const double Load = State == EDroneState::Idle ? 0.2 : FMath::Pow(ThrustAccel / Gravity, 1.5);
-		const double PercentPerSecond = 100.0 / (FMath::Max(HoverFlightTimeMinutes, 0.1f) * 60.0);
+		// Cold batteries deliver less: 2 % more drain per degree below 15 C (about +40 % at -5 C).
+		const double Cold = 1.0 + 0.02 * FMath::Max(0.f, 15.f - TemperatureC);
+		const double PercentPerSecond = Cold * 100.0 / (FMath::Max(HoverFlightTimeMinutes, 0.1f) * 60.0);
 		BatteryPercent = FMath::Max(0.f, BatteryPercent - static_cast<float>(PercentPerSecond * Load * DeltaSeconds));
 
 		const bool bAirborne = State == EDroneState::Flying || State == EDroneState::ReturningHome || State == EDroneState::TakingOff;
@@ -849,7 +924,9 @@ void ADronePawn::UpdateBatteryAndWarnings(float DeltaSeconds)
 	else if (bAtMaxHeight) { WarningText = TEXT("MAX ALTITUDE REACHED"); }
 	else if (GetDistanceM() > VlosWarningDistanceM) { WarningText = TEXT("BEYOND VISUAL LINE OF SIGHT"); }
 	else if (bAtti) { WarningText = TEXT("ATTI MODE - no position hold"); }
+	else if (bRain) { WarningText = TEXT("RAIN - land as soon as possible"); }
 	else if (WindSpeed >= 10.f) { WarningText = TEXT("STRONG WIND"); }
+	else if (TemperatureC < 0.f && AreMotorsRunning()) { WarningText = TEXT("COLD - battery drains faster"); }
 	else { WarningText.Reset(); }
 }
 
@@ -897,19 +974,20 @@ void ADronePawn::SendPhoneTelemetry(float DeltaSeconds)
 
 	const UGameInstance* GameInstance = GetGameInstance();
 	UPhoneControllerSubsystem* Phone = GameInstance ? GameInstance->GetSubsystem<UPhoneControllerSubsystem>() : nullptr;
-	if (!Phone || Phone->GetNumPhones() == 0)
+	if (!Phone || !(Phone->IsSlotActive(PhoneSlot) || (PhoneSlot == 0 && Phone->GetNumPhones() > 0)))
 	{
 		return;
 	}
 
 	const ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>();
 	const FString SceneName = GameMode ? GameMode->GetSceneName() : FString();
+	const FString Weather = GameMode ? GameMode->GetWeatherLabel() : FString::Printf(TEXT("Wind %.0f m/s"), WindSpeed);
 
-	// state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|wind|scene|warning
-	Phone->BroadcastTelemetry(FString::Printf(TEXT("%d|%d|%d|%d|%.1f|%.0f|%.1f|%.1f|%.0f|%d|%.0f|%s|%s"),
+	// state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|weather|scene|warning
+	Phone->SendTelemetry(PhoneSlot, FString::Printf(TEXT("%d|%d|%d|%d|%.1f|%.0f|%.1f|%.1f|%.0f|%d|%s|%s|%s"),
 		static_cast<int32>(State), static_cast<int32>(FlightMode), bAtti ? 1 : 0, static_cast<int32>(StickMode),
 		GetHeightM(), GetDistanceM(), GetHorizontalSpeed(), GetVerticalSpeed(), BatteryPercent,
-		static_cast<int32>(CameraView), WindSpeed, SceneName.IsEmpty() ? TEXT("-") : *SceneName, *WarningText));
+		static_cast<int32>(CameraView), *Weather, SceneName.IsEmpty() ? TEXT("-") : *SceneName, *WarningText));
 }
 
 float ADronePawn::GetHeightM() const
