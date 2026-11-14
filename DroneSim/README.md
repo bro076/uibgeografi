@@ -100,6 +100,25 @@ then add a line to the `Scenes` table in `DroneSimGameMode.cpp`.
 
 ## Getting it running
 
+### Mac: one command
+
+Needs Unreal Engine 5.3+ (Epic Games Launcher) and Xcode (App Store, opened once). Then in Terminal:
+
+```
+cd DroneSim
+bash Tools/setup_mac.sh
+```
+
+It downloads the assets, compiles the project, imports the assets and opens the editor.
+If compiling fails it prints the compiler errors; send those to get them fixed.
+
+Mac notes: use an Apple Silicon Mac. The scanned tree models rely on Nanite, which on Mac
+needs a recent engine version and an M2 or newer; on other Macs run with
+`SKIP_ASSETS=1 bash Tools/setup_mac.sh` to keep the simple trees. Four-way split screen is
+heavy for a laptop.
+
+### Windows, or by hand
+
 1. Install Unreal Engine 5.3 or newer and Visual Studio with the "Game development with C++" workload
    (Xcode on Mac).
 2. Right-click `DroneSim.uproject` → **Generate Visual Studio project files**. If asked, pick
