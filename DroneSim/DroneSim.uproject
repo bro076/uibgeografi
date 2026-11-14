@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.6",
+	"Category": "Education",
+	"Description": "Manual flight trainer for DJI-style camera drones with phone-as-controller support.",
+	"Modules": [
+		{
+			"Name": "DroneSim",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
