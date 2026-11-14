@@ -61,6 +61,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone") float GetTemperatureC() const { return TemperatureC; }
 	UFUNCTION(BlueprintPure, Category = "Drone") bool IsInRain() const { return bRain; }
 
+	UFUNCTION(BlueprintPure, Category = "Drone") bool IsOnGround() const { return bOnGround; }
+	const FVector& GetSpawnLocation() const { return SpawnLocation; }
+	/** While locked the sticks read as centred and take-off is refused (race countdown). */
+	void SetInputLocked(bool bLocked) { bInputLocked = bLocked; }
+
 	/** Which phone flies this drone (0-3). Slot 0 is also the keyboard / gamepad drone. */
 	UFUNCTION(BlueprintPure, Category = "Drone") int32 GetPhoneSlot() const { return PhoneSlot; }
 	void SetPhoneSlot(int32 Slot);
@@ -197,6 +202,7 @@ private:
 	float TelemetryTimer = 0.f;
 	int32 WindPreset = 1;
 	int32 PhoneSlot = 0;
+	bool bInputLocked = false;
 	float TemperatureC = 12.f;
 	bool bRain = false;
 	double PauseBrakeTime = 0.0;   // seconds left of the flight-pause brake

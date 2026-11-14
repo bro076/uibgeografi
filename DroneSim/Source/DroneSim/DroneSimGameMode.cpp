@@ -18,6 +18,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Math/RandomStream.h"
 #include "Misc/ConfigCacheIni.h"
 
 namespace
@@ -62,6 +63,9 @@ namespace
 
 	const float DroneSpacingM = 2.5f;        // take-off points are lined up eastward
 	const float PhoneGoneSeconds = 15.f;     // a drone is removed this long after its phone disconnects
+	const float RaceCountdownSeconds = 4.f;  // "get ready", then 3, 2, 1
+	const float GateRadiusCm = 380.f;        // a drone this close to a gate centre has passed it
+	const float MaxCourseRiseM = 95.f;       // gates stay below the 120 m ceiling above the take-off point
 }
 
 ADroneSimGameMode::ADroneSimGameMode()
@@ -177,6 +181,7 @@ void ADroneSimGameMode::LoadScene(int32 Index)
 		return;
 	}
 
+	EndRace();   // a course belongs to the landscape it was built on
 	SceneIndex = FMath::Clamp(Index, 0, NumScenes - 1);
 	const FDroneScene& Scene = Scenes[SceneIndex];
 
@@ -227,6 +232,7 @@ void ADroneSimGameMode::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	UpdateWeather(DeltaSeconds);
 	UpdatePhonePlayers(DeltaSeconds);
+	UpdateRace(DeltaSeconds);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -368,4 +374,333 @@ void ADroneSimGameMode::UpdatePhonePlayers(float DeltaSeconds)
 			}
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------------------------
+// Race
+// ---------------------------------------------------------------------------------------------
+
+ADronePawn* ADroneSimGameMode::FindDrone(int32 Slot) const
+{
+	for (TActorIterator<ADronePawn> It(GetWorld()); It; ++It)
+	{
+		if (It->GetPhoneSlot() == Slot)
+		{
+			return *It;
+		}
+	}
+	return nullptr;
+}
+
+float ADroneSimGameMode::GroundHeightCm(double X, double Y) const
+{
+	if (Terrain)
+	{
+		// Built-in landscape: exact, and never below the fjord surface.
+		return FMath::Max(0.f, Terrain->GetHeightM(X / 100.0, Y / 100.0)) * 100.f;
+	}
+
+	// Custom map: look down from high above.
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(DroneRaceGround), false);
+	for (TActorIterator<ADronePawn> It(GetWorld()); It; ++It)
+	{
+		Params.AddIgnoredActor(*It);
+	}
+	if (GetWorld()->LineTraceSingleByChannel(Hit, FVector(X, Y, 500000.0), FVector(X, Y, -500000.0), ECC_Visibility, Params))
+	{
+		return static_cast<float>(Hit.ImpactPoint.Z);
+	}
+	return 0.f;
+}
+
+void ADroneSimGameMode::BuildRaceCourse()
+{
+	RacePoints.Reset();
+
+	// The course loops once around drone 1's take-off point, so it stays in sight of the pilots.
+	FVector Home = FVector::ZeroVector;
+	if (const ADronePawn* First = FindDrone(0))
+	{
+		Home = First->GetSpawnLocation();
+	}
+	const float MaxZ = static_cast<float>(Home.Z) + MaxCourseRiseM * 100.f;
+
+	// Same course every time for a given landscape, so times can be compared between sessions.
+	FRandomStream Random(9001 + SceneIndex * 131);
+	const int32 NumGates = FMath::Clamp(RaceGates, 2, 24);
+	const float StartAngle = Random.FRandRange(0.f, 360.f);
+
+	auto PointAt = [&](float AngleDeg, float RadiusM)
+	{
+		const float Rad = FMath::DegreesToRadians(AngleDeg);
+		return FVector2D(Home.X + FMath::Cos(Rad) * RadiusM * 100.f, Home.Y + FMath::Sin(Rad) * RadiusM * 100.f);
+	};
+
+	// A landing box needs dry, not-too-high ground: try a few spots around the wanted one.
+	auto AddLandingBox = [&](float AngleDeg, float RadiusM)
+	{
+		FVector2D Spot = PointAt(AngleDeg, RadiusM);
+		for (int32 Try = 0; Try < 12; ++Try)
+		{
+			const float Ground = GroundHeightCm(Spot.X, Spot.Y);
+			if (Ground > 150.f && Ground < MaxZ)
+			{
+				break;
+			}
+			Spot = PointAt(AngleDeg + 30.f * (Try + 1), RadiusM * (Try % 2 == 0 ? 0.7f : 1.f));
+		}
+		FDroneRacePoint Box;
+		Box.bLanding = true;
+		Box.YawDeg = Random.FRandRange(0.f, 90.f);
+		// Sunk slightly so it sits firmly on sloping ground; Location is the top face.
+		Box.Location = FVector(Spot.X, Spot.Y, GroundHeightCm(Spot.X, Spot.Y) + ADroneRaceCourse::LandingBoxM * 100.f - 20.f);
+		RacePoints.Add(Box);
+	};
+
+	for (int32 i = 0; i < NumGates; ++i)
+	{
+		const float Angle = StartAngle + 360.f * i / NumGates;
+		float RadiusM = Random.FRandRange(RaceRadiusMinM, FMath::Max(RaceRadiusMinM, RaceRadiusMaxM));
+		const float HeightM = Random.FRandRange(RaceHeightMinM, FMath::Max(RaceHeightMinM, RaceHeightMaxM));
+
+		// Pull the gate in towards the take-off point if the hillside there is too high.
+		FVector2D Spot = PointAt(Angle, RadiusM);
+		for (int32 Try = 0; Try < 6 && GroundHeightCm(Spot.X, Spot.Y) + HeightM * 100.f > MaxZ; ++Try)
+		{
+			RadiusM *= 0.7f;
+			Spot = PointAt(Angle, RadiusM);
+		}
+
+		FDroneRacePoint Gate;
+		Gate.Location = FVector(Spot.X, Spot.Y, FMath::Min(GroundHeightCm(Spot.X, Spot.Y) + HeightM * 100.f, MaxZ));
+		RacePoints.Add(Gate);
+
+		if (i == NumGates / 2 - 1)
+		{
+			// Halfway: come down, land on a box inside the loop, take off again.
+			AddLandingBox(Angle + 180.f / NumGates, RaceRadiusMinM * 0.5f);
+		}
+	}
+
+	// Finish: a box about 15 m in front of the take-off line.
+	AddLandingBox(StartAngle, 15.f);
+
+	// Each gate faces the way the drones arrive.
+	FVector Previous = Home;
+	for (FDroneRacePoint& Point : RacePoints)
+	{
+		if (!Point.bLanding)
+		{
+			Point.YawDeg = static_cast<float>((Point.Location - Previous).Rotation().Yaw);
+		}
+		Previous = Point.Location;
+	}
+}
+
+void ADroneSimGameMode::StartRace()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	BuildRaceCourse();
+	if (!RaceCourse)
+	{
+		RaceCourse = World->SpawnActor<ADroneRaceCourse>(FVector::ZeroVector, FRotator::ZeroRotator);
+	}
+	if (RaceCourse)
+	{
+		RaceCourse->Build(RacePoints);
+	}
+
+	for (FRacer& Racer : Racers)
+	{
+		Racer = FRacer();
+	}
+	for (TActorIterator<ADronePawn> It(World); It; ++It)
+	{
+		It->ResetDrone();
+		It->SetInputLocked(true);   // nobody leaves before the start
+	}
+	RaceClock = -RaceCountdownSeconds;
+	RacePhase = ERacePhase::Countdown;
+}
+
+void ADroneSimGameMode::EndRace()
+{
+	if (RaceCourse)
+	{
+		RaceCourse->Destroy();
+		RaceCourse = nullptr;
+	}
+	RacePoints.Reset();
+	if (RacePhase != ERacePhase::Off)
+	{
+		RacePhase = ERacePhase::Off;
+		for (TActorIterator<ADronePawn> It(GetWorld()); It; ++It)
+		{
+			It->SetInputLocked(false);
+		}
+	}
+}
+
+void ADroneSimGameMode::UpdateRace(float DeltaSeconds)
+{
+	if (RacePhase == ERacePhase::Off)
+	{
+		return;
+	}
+
+	RaceClock += DeltaSeconds;
+	if (RacePhase == ERacePhase::Countdown)
+	{
+		// Drones that join during the countdown are held too.
+		for (TActorIterator<ADronePawn> It(GetWorld()); It; ++It)
+		{
+			It->SetInputLocked(RaceClock < 0.f);
+		}
+		if (RaceClock < 0.f)
+		{
+			return;
+		}
+		RacePhase = ERacePhase::Running;
+	}
+
+	for (TActorIterator<ADronePawn> It(GetWorld()); It; ++It)
+	{
+		const int32 Slot = It->GetPhoneSlot();
+		if (Slot < 0 || Slot >= MaxRacers)
+		{
+			continue;
+		}
+		FRacer& Racer = Racers[Slot];
+		if (Racer.FinishTime >= 0.f || !RacePoints.IsValidIndex(Racer.NextPoint))
+		{
+			continue;
+		}
+
+		const FDroneRacePoint& Point = RacePoints[Racer.NextPoint];
+		const FVector Location = It->GetActorLocation();
+		bool bReached = false;
+		if (Point.bLanding)
+		{
+			// Touched down on top of the box (the drone's centre rests a little above the surface).
+			const float Reach = ADroneRaceCourse::LandingBoxM * 50.f * 1.42f + 10.f;   // box corners count
+			bReached = It->IsOnGround()
+				&& FVector::Dist2D(Location, Point.Location) < Reach
+				&& FMath::Abs(Location.Z - Point.Location.Z) < 70.0;
+		}
+		else
+		{
+			bReached = FVector::Dist(Location, Point.Location) < GateRadiusCm;
+		}
+
+		if (bReached)
+		{
+			++Racer.NextPoint;
+			if (Racer.NextPoint >= RacePoints.Num())
+			{
+				Racer.FinishTime = RaceClock;
+			}
+		}
+	}
+}
+
+int32 ADroneSimGameMode::GetRaceCountdown() const
+{
+	if (RacePhase != ERacePhase::Countdown)
+	{
+		return 0;
+	}
+	return FMath::Clamp(FMath::CeilToInt(-RaceClock), 1, 3);
+}
+
+FString ADroneSimGameMode::FormatRaceTime(float Seconds)
+{
+	const int32 Minutes = FMath::FloorToInt(Seconds / 60.f);
+	return FString::Printf(TEXT("%d:%04.1f"), Minutes, Seconds - Minutes * 60.f);
+}
+
+bool ADroneSimGameMode::GetRaceTarget(int32 Slot, FVector& OutLocation, bool& bOutLanding, int32& OutNumber) const
+{
+	if (RacePhase == ERacePhase::Off || Slot < 0 || Slot >= MaxRacers || !RacePoints.IsValidIndex(Racers[Slot].NextPoint))
+	{
+		return false;
+	}
+	const FDroneRacePoint& Point = RacePoints[Racers[Slot].NextPoint];
+	OutLocation = Point.Location;
+	bOutLanding = Point.bLanding;
+	OutNumber = Racers[Slot].NextPoint + 1;
+	return true;
+}
+
+FString ADroneSimGameMode::GetRaceLine(int32 Slot) const
+{
+	if (RacePhase == ERacePhase::Off || Slot < 0 || Slot >= MaxRacers)
+	{
+		return FString();
+	}
+	if (RacePhase == ERacePhase::Countdown)
+	{
+		return FString::Printf(TEXT("RACE STARTS IN %d"), GetRaceCountdown());
+	}
+
+	const FRacer& Racer = Racers[Slot];
+	if (Racer.FinishTime >= 0.f)
+	{
+		int32 Place = 1;
+		for (const FRacer& Other : Racers)
+		{
+			if (Other.FinishTime >= 0.f && Other.FinishTime < Racer.FinishTime)
+			{
+				++Place;
+			}
+		}
+		static const TCHAR* Places[] = { TEXT("1st"), TEXT("2nd"), TEXT("3rd"), TEXT("4th") };
+		return FString::Printf(TEXT("FINISHED %s (%s)"), *FormatRaceTime(Racer.FinishTime), Places[FMath::Clamp(Place, 1, 4) - 1]);
+	}
+
+	const bool bLanding = RacePoints.IsValidIndex(Racer.NextPoint) && RacePoints[Racer.NextPoint].bLanding;
+	return FString::Printf(TEXT("%s %d/%d  %s"), bLanding ? TEXT("LAND ON BOX") : TEXT("GATE"), Racer.NextPoint + 1, RacePoints.Num(), *FormatRaceTime(RaceClock));
+}
+
+TArray<FString> ADroneSimGameMode::GetRaceStandings() const
+{
+	TArray<FString> Lines;
+	if (RacePhase != ERacePhase::Running)
+	{
+		return Lines;
+	}
+
+	// Finished drones by time, then the rest by how far they have got.
+	TArray<int32> Order;
+	for (int32 Slot = 0; Slot < MaxRacers; ++Slot)
+	{
+		if (FindDrone(Slot))
+		{
+			Order.Add(Slot);
+		}
+	}
+	Order.Sort([this](int32 A, int32 B)
+	{
+		const FRacer& RA = Racers[A];
+		const FRacer& RB = Racers[B];
+		const bool bDoneA = RA.FinishTime >= 0.f;
+		const bool bDoneB = RB.FinishTime >= 0.f;
+		if (bDoneA != bDoneB) { return bDoneA; }
+		if (bDoneA) { return RA.FinishTime < RB.FinishTime; }
+		return RA.NextPoint > RB.NextPoint;
+	});
+
+	for (int32 i = 0; i < Order.Num(); ++i)
+	{
+		const FRacer& Racer = Racers[Order[i]];
+		Lines.Add(Racer.FinishTime >= 0.f
+			? FString::Printf(TEXT("%d.  Drone %d   %s"), i + 1, Order[i] + 1, *FormatRaceTime(Racer.FinishTime))
+			: FString::Printf(TEXT("%d.  Drone %d   %d/%d"), i + 1, Order[i] + 1, Racer.NextPoint, RacePoints.Num()));
+	}
+	return Lines;
 }

@@ -77,6 +77,7 @@
   button.hold::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,255,255,.28); }
   button.hold.holding::after { width: 100%; transition: width .6s linear; }
   #bPause { flex: 0 0 44px; }
+  #race { color: #ffa040; font-weight: 700; display: none; }
   #drone { font-weight: 700; padding: 2px 8px; border-radius: 10px; color: #111; background: #b9bec4; display: none; }
   #gimbal {
     position: relative; flex: none; height: 52px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
@@ -110,6 +111,7 @@
     <div id="dot"></div>
     <div id="drone"></div>
     <div id="status">Connecting…</div>
+    <div id="race"></div>
     <div class="sp"></div>
     <div class="tm"><span>H</span><b id="tH">0.0</b> m</div>
     <div class="tm"><span>D</span><b id="tD">0</b> m</div>
@@ -164,6 +166,7 @@
   </div>
   <div class="row">
     <button id="bScene" class="small">Next landscape</button>
+    <button id="bRace" class="small">Start race</button>
   </div>
   <div class="row">
     <button id="bFull">Full screen</button>
@@ -232,22 +235,26 @@
   }, 33);
 
   // ---------------------------------------------------------------- telemetry
-  // t|role|state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|weather|scene|warning
+  // t|role|state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|weather|scene|race|warning
   // role is P1..P4 (this phone flies that drone) or S (spectating drone 1)
   var DRONE_COLOURS = ['#b9bec4', '#f08a3c', '#4c8dff', '#f2cf3a'];
   function onMessage(text) {
     var p = text.split('|');
-    if (p[0] !== 't' || p.length < 14) { return; }
+    if (p[0] !== 't' || p.length < 15) { return; }
     var pilot = p[1].charAt(0) === 'P';
     var droneNumber = pilot ? parseInt(p[1].slice(1), 10) || 1 : 0;
     $('drone').style.display = pilot ? 'block' : 'none';
     $('drone').textContent = 'Drone ' + droneNumber;
     $('drone').style.background = DRONE_COLOURS[droneNumber - 1] || DRONE_COLOURS[0];
     // Weather and landscape are shared by everyone: only drone 1 (the instructor) can change them.
-    $('bWind').disabled = $('bScene').disabled = droneNumber !== 1;
+    $('bWind').disabled = $('bScene').disabled = $('bRace').disabled = droneNumber !== 1;
     var state = parseInt(p[2], 10), mode = parseInt(p[3], 10), atti = p[4] === '1', stickMode = parseInt(p[5], 10);
     var battery = parseFloat(p[10]);
-    var warning = p[14] || '';
+    var warning = p[15] || '';
+    var racing = p[14] !== '-';
+    $('race').style.display = racing ? 'block' : 'none';
+    $('race').textContent = racing ? p[14] : '';
+    $('bRace').textContent = racing ? 'End race' : 'Start race';
     $('bScene').textContent = p[13] === '-' ? 'Landscape: custom map' : 'Next landscape (now: ' + p[13] + ')';
 
     $('status').textContent = (STATE_NAMES[state] || '') + (pilot ? '' : ' (spectating)');
@@ -379,6 +386,7 @@
   holdButton($('bTakeoff'), function () { command('takeoff'); });
   holdButton($('bRth'), function () { command('rth'); });
   $('bPause').onclick = function () { command('pause'); };
+  $('bRace').onclick = function () { command('race'); $('menu').className = 'overlay'; };
   $('bCam').onclick = function () { command('camera'); };
   $('bAtti').onclick = function () { command('atti'); };
   $('bWind').onclick = function () { command('wind'); };

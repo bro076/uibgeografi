@@ -11,7 +11,7 @@ with the option to use a phone as the remote controller.
 > for the three landscapes (previewed as top-down maps), and the asset downloader (every file
 > fetched successfully). The landscapes have not been seen rendered in Unreal, and the editor
 > script that builds the realistic materials has never been run. Split-screen multi-drone play
-> and the weather system are likewise untested in the engine.
+> the weather system and the race mode are likewise untested in the engine.
 
 ## What is in it
 
@@ -22,7 +22,8 @@ with the option to use a phone as the remote controller.
 | `Source/DroneSim/DroneHUD.*` | On-screen telemetry (H, D, H.S, V.S, battery), warnings, stick position display, pairing QR code |
 | `Source/DroneSim/QrCode.*` | QR code generator for the pairing URL |
 | `Source/DroneSim/DroneTerrain.*` | Builds a landscape at runtime from an elevation file: ground mesh, sea, trees, orchards, buildings |
-| `Source/DroneSim/DroneSimGameMode.*` | Spawns the sky and lighting, loads and switches landscapes |
+| `Source/DroneSim/DroneSimGameMode.*` | Sky and lighting, landscapes, shared weather, one drone per phone, race timing |
+| `Source/DroneSim/DroneRaceCourse.*` | The race gates and landing boxes |
 | `Content/Terrain/*.r16` | Real elevation data for the three landscapes |
 | `Tools/fetch_terrain.py` | Downloads elevation data for any coordinate, to add your own sites |
 | `Tools/fetch_assets.py` | Downloads the photoscanned textures and tree models |
@@ -161,6 +162,24 @@ Rendering four views costs roughly four times the graphics work; lower the resol
 quality settings if it stutters. Flying together across several PCs over the network is
 not implemented.
 
+## Race
+
+A timed course for one to four drones: fly through the gates in order and land on small boxes.
+
+- **Start:** F3 on the PC, or Menu → *Start race* on drone 1's phone. Every drone goes back to
+  its take-off point and is held during a 3-2-1 countdown. F4 (or *End race*) returns to free flight.
+- **Course:** eight orange square gates (7 m opening, 22–40 m above the ground) in a loop
+  90–190 m around the take-off point. Halfway round there is a yellow box to land on, and the
+  finish is a second box about 15 m from the start. The boxes are 1.2 m cubes.
+- **Passing a gate** means flying through its opening; the frame is solid, so clipping it is a crash.
+- **Landing** means touching down on top of the box. Then take off again and continue.
+- **On screen:** each pilot's view shows their next gate or box with a marker and distance, their
+  running time, and (on drone 1's view) the standings. The phone shows the same status line.
+- **After a crash:** reset the drone (Menu → *Reset drone*, or R). It restarts from the take-off
+  point with the gates already passed still counted; the clock keeps running.
+- The course is the same every time for a given landscape, so times can be compared. Number
+  of gates, loop radius and gate height are settings on `DroneSimGameMode`.
+
 ## Controls
 
 | Action | Keyboard | Gamepad | Phone |
@@ -178,6 +197,7 @@ not implemented.
 | Flight pause / brake | Space | Start | ❚❚ |
 | Reset | R | – | Menu |
 | Next landscape | F2 | – | Menu (drone 1 only) |
+| Start / end race | F3 / F4 | – | Menu (drone 1 only) |
 | Help / QR code on-off | F1 / Q | – | – |
 
 Motors can also be started the DJI way: hold both sticks down and inward for a moment, then

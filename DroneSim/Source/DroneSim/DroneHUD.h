@@ -18,6 +18,7 @@ private:
 	void DrawStick(float CenterX, float CenterY, float HalfSize, float X, float Y, const FString& Label, float TextScale);
 	void DrawPairingPanel(float Scale, float TextScale, const FString& Url, int32 NumPhones);
 	void DrawRain();
+	void DrawRace(const class ADroneSimGameMode* GameMode, const class ADronePawn* Drone, float Scale, float TextScale, bool bPrimary);
 
 	bool bShowHelp = true;
 	bool bShowQr = true;

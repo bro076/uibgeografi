@@ -282,6 +282,8 @@ void ADronePawn::GatherInput(float DeltaSeconds)
 		if (PC->WasInputKeyJustPressed(EKeys::SpaceBar) || PC->WasInputKeyJustPressed(EKeys::Gamepad_Special_Right)) { PauseFlight(); }
 		if (PC->WasInputKeyJustPressed(EKeys::R)) { ResetDrone(); }
 		if (PC->WasInputKeyJustPressed(EKeys::F2)) { HandleCommand(TEXT("scene")); }
+		if (PC->WasInputKeyJustPressed(EKeys::F3)) { HandleCommand(TEXT("race|1")); }
+		if (PC->WasInputKeyJustPressed(EKeys::F4)) { HandleCommand(TEXT("race|0")); }
 	}
 
 	// Phone controller
@@ -309,6 +311,10 @@ void ADronePawn::GatherInput(float DeltaSeconds)
 	}
 
 	Sticks.Clamp();
+	if (bInputLocked)
+	{
+		Sticks = FDroneSticks();
+	}
 	RawSticks = Sticks;
 
 	// Map the physical sticks to flight axes.
@@ -349,6 +355,16 @@ void ADronePawn::HandleCommand(const FString& Command)
 	else if (Name == TEXT("reset")) { ResetDrone(); }
 	// Weather and landscape are shared by everyone, so only drone 1 (the instructor's) may change them.
 	else if (Name == TEXT("wind") && PhoneSlot == 0) { CycleWind(); }
+	else if (Name == TEXT("race") && PhoneSlot == 0)
+	{
+		// race|1 = start or restart, race|0 = end, plain race = toggle
+		if (ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>())
+		{
+			const bool bStart = Argument.IsEmpty() ? !GameMode->IsRaceActive() : Value != 0;
+			if (bStart) { GameMode->StartRace(); }
+			else { GameMode->EndRace(); }
+		}
+	}
 	else if (Name == TEXT("scene") && PhoneSlot == 0)
 	{
 		if (ADroneSimGameMode* GameMode = GetWorld()->GetAuthGameMode<ADroneSimGameMode>())
@@ -409,6 +425,11 @@ void ADronePawn::StopMotors()
 
 void ADronePawn::ToggleTakeoffLand()
 {
+	if (bInputLocked)
+	{
+		return;
+	}
+
 	switch (State)
 	{
 	case EDroneState::MotorsOff:
@@ -983,11 +1004,13 @@ void ADronePawn::SendPhoneTelemetry(float DeltaSeconds)
 	const FString SceneName = GameMode ? GameMode->GetSceneName() : FString();
 	const FString Weather = GameMode ? GameMode->GetWeatherLabel() : FString::Printf(TEXT("Wind %.0f m/s"), WindSpeed);
 
-	// state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|weather|scene|warning
-	Phone->SendTelemetry(PhoneSlot, FString::Printf(TEXT("%d|%d|%d|%d|%.1f|%.0f|%.1f|%.1f|%.0f|%d|%s|%s|%s"),
+	const FString Race = GameMode ? GameMode->GetRaceLine(PhoneSlot) : FString();
+
+	// state|mode|atti|stickMode|height|distance|hSpeed|vSpeed|battery|camera|weather|scene|race|warning
+	Phone->SendTelemetry(PhoneSlot, FString::Printf(TEXT("%d|%d|%d|%d|%.1f|%.0f|%.1f|%.1f|%.0f|%d|%s|%s|%s|%s"),
 		static_cast<int32>(State), static_cast<int32>(FlightMode), bAtti ? 1 : 0, static_cast<int32>(StickMode),
 		GetHeightM(), GetDistanceM(), GetHorizontalSpeed(), GetVerticalSpeed(), BatteryPercent,
-		static_cast<int32>(CameraView), *Weather, SceneName.IsEmpty() ? TEXT("-") : *SceneName, *WarningText));
+		static_cast<int32>(CameraView), *Weather, SceneName.IsEmpty() ? TEXT("-") : *SceneName, Race.IsEmpty() ? TEXT("-") : *Race, *WarningText));
 }
 
 float ADronePawn::GetHeightM() const

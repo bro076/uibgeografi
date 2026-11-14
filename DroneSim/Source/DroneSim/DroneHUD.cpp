@@ -161,12 +161,18 @@ void ADroneHUD::DrawHUD()
 		DrawPairingPanel(S, T, Url, NumPhones);
 	}
 
+	if (GameMode && GameMode->IsRaceActive())
+	{
+		DrawRace(GameMode, Drone, S, T, bPrimary);
+	}
+
 	// ---- Help
 	if (bShowHelp && bPrimary)
 	{
 		static const TCHAR* HelpLines[] =
 		{
 			TEXT("F1  show / hide this help        Q  show / hide QR code       F2  next landscape"),
+			TEXT("F3  start / restart race         F4  end race"),
 			TEXT("Left stick  W A S D              Right stick  arrow keys      (or a gamepad / phone)"),
 			TEXT("T  take off / land               H  return to home            R  reset"),
 			TEXT("1 2 3  Cine / Normal / Sport     4  ATTI (no GPS hold)        M  stick mode"),
@@ -181,6 +187,74 @@ void ADroneHUD::DrawHUD()
 		for (int32 i = 0; i < NumLines; ++i)
 		{
 			DrawText(HelpLines[i], Dim, HelpX + 10.f * S, HelpY + 8.f * S + Line * i, Font, T * 0.85f);
+		}
+	}
+}
+
+void ADroneHUD::DrawRace(const ADroneSimGameMode* GameMode, const ADronePawn* Drone, float Scale, float TextScale, bool bPrimary)
+{
+	UFont* Font = GEngine->GetMediumFont();
+	const float W = static_cast<float>(Canvas->SizeX);
+	const float H = static_cast<float>(Canvas->SizeY);
+	const FLinearColor Accent(1.f, 0.55f, 0.1f, 1.f);
+
+	// ---- Status line under the battery, big digits during the countdown
+	const FString Line = GameMode->GetRaceLine(Drone->GetPhoneSlot());
+	const float LineW = 420.f * Scale;
+	DrawRect(Panel, (W - LineW) * 0.5f, 104.f * Scale, LineW, 36.f * Scale);
+	DrawText(Line, Accent, (W - LineW) * 0.5f + 14.f * Scale, 110.f * Scale, Font, TextScale);
+
+	const int32 Countdown = GameMode->GetRaceCountdown();
+	if (Countdown > 0)
+	{
+		DrawText(FString::FromInt(Countdown), Accent, W * 0.5f - 30.f * Scale, H * 0.3f, Font, TextScale * 8.f);
+	}
+
+	// ---- Marker on the next gate or landing box
+	FVector Target;
+	bool bLanding = false;
+	int32 Number = 0;
+	if (Countdown == 0 && GameMode->GetRaceTarget(Drone->GetPhoneSlot(), Target, bLanding, Number))
+	{
+		const float DistanceM = static_cast<float>(FVector::Dist(Target, Drone->GetActorLocation()) / 100.0);
+		const FString Label = FString::Printf(TEXT("%s %d   %.0f m"), bLanding ? TEXT("LAND") : TEXT("GATE"), Number, DistanceM);
+
+		FVector Screen = Project(Target);
+		const float Edge = 60.f * Scale;
+		const bool bBehind = Screen.Z <= 0.f;
+		if (bBehind)
+		{
+			// Behind the camera: the projection is mirrored, so flip it and pin the marker to the bottom edge.
+			Screen.X = W - Screen.X;
+			Screen.Y = H;
+		}
+		const float X = FMath::Clamp(static_cast<float>(Screen.X), Edge, W - Edge);
+		const float Y = FMath::Clamp(static_cast<float>(Screen.Y), Edge, H - Edge);
+		const bool bOffScreen = bBehind || X != static_cast<float>(Screen.X) || Y != static_cast<float>(Screen.Y);
+
+		const float Size = (bOffScreen ? 14.f : 26.f) * Scale;
+		const float Thick = 3.f * Scale;
+		DrawLine(X - Size, Y, X, Y - Size, Accent, Thick);
+		DrawLine(X, Y - Size, X + Size, Y, Accent, Thick);
+		DrawLine(X + Size, Y, X, Y + Size, Accent, Thick);
+		DrawLine(X, Y + Size, X - Size, Y, Accent, Thick);
+		DrawText(Label, Accent, FMath::Clamp(X - 60.f * Scale, 8.f, W - 190.f * Scale), Y + Size + 6.f * Scale, Font, TextScale * 0.9f);
+	}
+
+	// ---- Standings, on the first player's view
+	if (bPrimary)
+	{
+		const TArray<FString> Standings = GameMode->GetRaceStandings();
+		const float RowH = 26.f * Scale;
+		const float BoxW = 300.f * Scale;
+		const float Y0 = H * 0.42f;
+		if (Standings.Num() > 0)
+		{
+			DrawRect(Panel, 24.f * Scale, Y0, BoxW, RowH * Standings.Num() + 14.f * Scale);
+		}
+		for (int32 i = 0; i < Standings.Num(); ++i)
+		{
+			DrawText(Standings[i], White, 34.f * Scale, Y0 + 7.f * Scale + RowH * i, Font, TextScale);
 		}
 	}
 }
