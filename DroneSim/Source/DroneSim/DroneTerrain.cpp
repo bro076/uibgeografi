@@ -361,7 +361,7 @@ bool ADroneTerrain::Build(const FString& FileName, float InSpacingM, EDroneBiome
 	}
 	if (!Material && GEngine)
 	{
-		Material = static_cast<UMaterialInterface*>(GEngine->VertexColorMaterial);
+		Material = GEngine->VertexColorMaterial.Get();
 	}
 	if (Material)
 	{

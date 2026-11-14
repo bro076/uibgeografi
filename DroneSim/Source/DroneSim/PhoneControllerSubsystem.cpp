@@ -38,7 +38,7 @@ namespace
 	const double StickTimeoutSeconds = 0.5;   // older than this = signal lost, sticks read as centred
 	const int32 MaxBufferedBytes = 64 * 1024;
 
-	FString BytesToString(const uint8* Data, int32 Length)
+	FString Utf8BytesToString(const uint8* Data, int32 Length)
 	{
 		TArray<uint8> Terminated;
 		Terminated.Append(Data, Length);
@@ -352,7 +352,7 @@ void UPhoneControllerSubsystem::HandleHttp(FPhoneClient& Client)
 		return;
 	}
 
-	const FString Request = BytesToString(Client.In.GetData(), HeaderEnd);
+	const FString Request = Utf8BytesToString(Client.In.GetData(), HeaderEnd);
 	Client.In.RemoveAt(0, HeaderEnd + 4);
 
 	TArray<FString> Lines;
@@ -473,7 +473,7 @@ void UPhoneControllerSubsystem::HandleFrames(FPhoneClient& Client)
 		switch (Opcode)
 		{
 		case 0x1:   // text
-			HandleText(Client, BytesToString(Payload.GetData(), Payload.Num()));
+			HandleText(Client, Utf8BytesToString(Payload.GetData(), Payload.Num()));
 			break;
 		case 0x8:   // close
 			CloseClient(Client);

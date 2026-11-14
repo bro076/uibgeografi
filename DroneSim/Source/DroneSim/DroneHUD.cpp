@@ -79,8 +79,8 @@ void ADroneHUD::DrawHUD()
 	}
 
 	// With several drones the screen is split; shared panels (pairing, help) go on the first player's view only.
-	const APlayerController* Owner = GetOwningPlayerController();
-	const bool bPrimary = !Owner || Owner->IsPrimaryPlayer();
+	const APlayerController* OwningPC = GetOwningPlayerController();
+	const bool bPrimary = !OwningPC || OwningPC->IsPrimaryPlayer();
 
 	if (Drone->IsInRain())
 	{

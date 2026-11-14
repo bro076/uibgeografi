@@ -137,9 +137,9 @@ void ADroneSimGameMode::SpawnSky()
 		}
 	}
 
-	if (AExponentialHeightFog* Fog = World->SpawnActor<AExponentialHeightFog>())
+	if (AExponentialHeightFog* FogActor = World->SpawnActor<AExponentialHeightFog>())
 	{
-		if (UExponentialHeightFogComponent* Component = Fog->GetComponent())
+		if (UExponentialHeightFogComponent* Component = FogActor->GetComponent())
 		{
 			Component->SetFogDensity(0.006f);
 			Component->SetVolumetricFog(true);   // soft light shafts and haze in the valleys
@@ -348,10 +348,10 @@ void ADroneSimGameMode::UpdatePhonePlayers(float DeltaSeconds)
 			if (!Existing)
 			{
 				// A new local player gets its own controller, drone, HUD and a share of the screen.
-				if (APlayerController* Controller = UGameplayStatics::CreatePlayer(this, -1, true))
+				if (APlayerController* SlotPC = UGameplayStatics::CreatePlayer(this, -1, true))
 				{
-					SlotControllers.Add(Slot, Controller);
-					if (ADronePawn* Drone = Cast<ADronePawn>(Controller->GetPawn()))
+					SlotControllers.Add(Slot, SlotPC);
+					if (ADronePawn* Drone = Cast<ADronePawn>(SlotPC->GetPawn()))
 					{
 						Drone->SetPhoneSlot(Slot);
 					}
@@ -365,9 +365,9 @@ void ADroneSimGameMode::UpdatePhonePlayers(float DeltaSeconds)
 			Idle += DeltaSeconds;
 			if (Idle > PhoneGoneSeconds)
 			{
-				if (APlayerController* Controller = Existing->Get())
+				if (APlayerController* SlotPC = Existing->Get())
 				{
-					UGameplayStatics::RemovePlayer(Controller, true);
+					UGameplayStatics::RemovePlayer(SlotPC, true);
 				}
 				SlotControllers.Remove(Slot);
 				SlotIdleSeconds.Remove(Slot);

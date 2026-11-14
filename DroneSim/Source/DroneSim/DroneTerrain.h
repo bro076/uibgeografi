@@ -20,7 +20,7 @@ enum class EDroneBiome : uint8
 };
 
 /**
- * A landscape generated at runtime from a real elevation file (Content/Terrain/*.r16,
+ * A landscape generated at runtime from a real elevation file (Content/Terrain/<name>.r16,
  * see Tools/fetch_terrain.py). The centre of the file sits at this actor's origin,
  * +X is north and +Y is east, sea level is Z = 0.
  */
