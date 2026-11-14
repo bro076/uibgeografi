@@ -57,6 +57,19 @@ Install Xcode from the App Store, open it once to accept the licence, then run t
 fi
 echo "Xcode: $(xcodebuild -version | head -n 1)"
 
+# Unreal compiles its shaders with Apple's Metal compiler, which newer Xcode versions download separately.
+if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
+	echo "The Metal shader compiler is missing. Installing it (needs your Mac password)..."
+	sudo xcodebuild -runFirstLaunch && xcodebuild -downloadComponent MetalToolchain
+	if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
+		fail "The Metal toolchain could not be installed. In Terminal run:
+  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+  sudo xcodebuild -runFirstLaunch
+  xcodebuild -downloadComponent MetalToolchain
+then run this script again."
+	fi
+fi
+
 # ---------------------------------------------------------------- 2. engine version in the project
 ENGINE_VERSION="$(basename "$UE_ROOT" | sed 's/^UE_//')"
 case "$ENGINE_VERSION" in
